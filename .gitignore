@@ -1,0 +1,5 @@
+itunes-search-modernjs/
+node_modules/
+dist/
+*.log
+.DS_Store
