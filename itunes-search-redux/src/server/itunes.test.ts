@@ -139,7 +139,7 @@ describe('searchItunes', () => {
 
     // Assert that the term and limit parameters are correct for all requests
     expect(requestedUrls.every((u) => u.searchParams.get('term') === 'radiohead')).toBe(true);
-    expect(requestedUrls.every((u) => u.searchParams.get('limit') === '10')).toBe(true);
+    expect(requestedUrls.every((u) => u.searchParams.get('limit') === '20')).toBe(true);
 
     // Assert that the results are interleaved correctly based on the mocked data
     expect(results.map((x) => x.kind)).toEqual(['artist', 'album', 'song']);

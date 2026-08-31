@@ -93,11 +93,11 @@ const UPSTREAM_TIMEOUT_MS = 8000;
  * Must run server-side: iTunes CORS-blocks browsers. Each upstream call is
  * abandoned after 8s via AbortSignal.timeout.
  */
-export async function searchItunes(term: string) {
+export async function searchItunes(term: string, limit = 20) {
   const payloads = await Promise.all(
     ENTITIES.map(async (entity) => {
       // Build the URL with query parameters for the iTunes Search API
-      const params = new URLSearchParams({ term, entity, limit: '10' });
+      const params = new URLSearchParams({ term, entity, limit: limit.toString() });
 
       // Fetch the results from iTunes with a timeout
       const res = await fetch(`${ITUNES_URL}?${params}`, {
