@@ -1,0 +1,1611 @@
+# iTunes Search (Redux app) Implementation Plan
+
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+
+**Goal:** Build the primary iTunes search app — React + TypeScript + Redux Toolkit client, Express BFF server — to fully done (code, tests, READMEs, CI, live Render deploy), per `docs/plans/2026-08-28-itunes-search-design.md`. The bar is production-ready: this stays up as a portfolio piece Luke can point to, and stays easy to progress (see the design doc's "Production readiness" section).
+
+**Architecture:** Single package at `itunes-search-redux/` with `src/client` (Vite + React + Redux Toolkit), `src/server` (Express BFF that fans out to the iTunes Search API, normalizes, interleaves), and `src/shared` (types). The client fetches one merged result set per search and reveals 10 rows at a time via an IntersectionObserver sentinel. In prod, Express statically serves the Vite build.
+
+**Tech Stack:** TypeScript (strict), React 19, Redux Toolkit (`createAsyncThunk`), Express 5, Vite, Vitest (projects: node env for server, jsdom for client), @testing-library/react, supertest, styled-components, oxlint (linting), oxfmt (formatting), tsx (dev server runner), Node 22, **pnpm** (package manager — pinned via `packageManager`, matching the Modern.js app). Deployment: Render web service (free plan) via `render.yaml` Blueprint; CI via GitHub Actions.
+
+**Repo context:** The repo (`C:\dev\interviews\next`) has **zero commits**. `itunes-search-modernjs/` (existing scaffold) and `docs/` exist already; don't touch the Modern.js app — it has its own plan later. Note the design doc's "Repo layout" section uses older directory names (`next-technical-test-redux`); the real names are `itunes-search-redux` and `itunes-search-modernjs`.
+
+**Commits — CRITICAL:** Claude commits **nothing**. Never run `git add` or `git commit`. Luke reviews every code change and handles all commits himself (he needs to be across the code for interview purposes). Every task therefore ends with a **CHECKPOINT**: stop, summarize what changed and why, list the files touched, and wait for Luke to review/comment/commit before starting the next task. A suggested commit message is included at each checkpoint purely as a convenience — Luke may use, edit, or ignore it.
+
+**Conventions for all tasks:** Run all commands from `C:\dev\interviews\next\itunes-search-redux` unless stated otherwise (Task 1 runs from the repo root). Vitest is imported explicitly (`import { describe, it, expect } from 'vitest'`) — no globals. Server code is ESM with `.js` extensions on relative imports; client code uses bundler resolution (no extensions). Before every checkpoint, run `pnpm lint` and `pnpm format` (from Task 2 onward) so every diff Luke reviews is lint-clean and consistently formatted. **Every exported implementation gets succinct-but-clear JSDoc per the root `CLAUDE.md`** (house style: `src/shared/types.ts`) — apply this even where a plan snippet omits it for brevity.
+
+---
+
+### Task 1: Root gitignore
+
+**Files:**
+- Create: `.gitignore` (repo root)
+
+**Step 1: Write root `.gitignore`**
+
+```gitignore
+node_modules/
+dist/
+*.log
+.DS_Store
+```
+
+**Step 2: CHECKPOINT**
+
+Everything currently in the repo (design doc, this plan, Modern.js scaffold, the new `.gitignore`) is untracked. Hand off to Luke for the initial commit.
+
+Suggested message: `chore: add design doc, plans, Modern.js scaffold, root gitignore`
+
+---
+
+### Task 2: Redux app scaffold (tooling only, no features)
+
+**Files:**
+- Create: `itunes-search-redux/package.json`
+- Create: `itunes-search-redux/.gitignore`
+- Create: `itunes-search-redux/tsconfig.json`
+- Create: `itunes-search-redux/tsconfig.server.json`
+- Create: `itunes-search-redux/vite.config.ts`
+- Create: `itunes-search-redux/.oxlintrc.json`
+- Create: `itunes-search-redux/index.html`
+- Create: `itunes-search-redux/src/client/main.tsx` (placeholder)
+- Create: `itunes-search-redux/src/client/test/setup.ts`
+
+**Step 1: Create `package.json`**
+
+```json
+{
+  "name": "itunes-search-redux",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "packageManager": "pnpm@9.1.2",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "dev": "concurrently -k \"pnpm:dev:server\" \"pnpm:dev:client\"",
+    "dev:server": "tsx watch src/server/index.ts",
+    "dev:client": "vite",
+    "build": "vite build && tsc -p tsconfig.server.json",
+    "start": "node dist/server/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "oxlint",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.server.json --noEmit"
+  }
+}
+```
+
+**Step 2: Install dependencies**
+
+```bash
+pnpm add express helmet compression react react-dom @reduxjs/toolkit react-redux styled-components
+pnpm add -D typescript tsx vite @vitejs/plugin-react vitest jsdom @testing-library/react @testing-library/user-event @testing-library/jest-dom supertest @types/supertest @types/express @types/compression @types/react @types/react-dom @types/node concurrently oxlint oxfmt
+```
+
+(`helmet` and `compression` are part of the production bar — wired up in Task 6.)
+
+**Step 3: Verify the oxfmt / oxlint CLIs**
+
+oxfmt is young and its flags move — confirm before relying on the scripts:
+
+```bash
+pnpm oxfmt --help
+pnpm oxlint --help
+```
+
+Expected: `oxfmt` formats in place when given paths/no args, and has a check mode (`--check` or similar); adjust the `format`/`format:check` scripts to match the actual flags if they differ. oxlint runs with sensible defaults (correctness rules, TS + React plugins).
+
+**Step 4: Create `.oxlintrc.json`**
+
+Minimal config — defaults are good; just make test-runner and browser/node globals explicit and ignore build output:
+
+```json
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "ignorePatterns": ["dist"],
+  "env": { "browser": true, "node": true, "es2024": true }
+}
+```
+
+(If the installed oxlint's schema path or option names differ, follow `pnpm oxlint --help` — keep the config minimal.)
+
+**Step 5: Create `.gitignore`**
+
+```gitignore
+node_modules/
+dist/
+```
+
+**Step 6: Create `tsconfig.json` (client + shared, no emit)**
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": []
+  },
+  "include": ["src/client", "src/shared", "vite.config.ts"]
+}
+```
+
+**Step 7: Create `tsconfig.server.json` (server + shared, emits to `dist/`)**
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
+    "rootDir": "src",
+    "outDir": "dist",
+    "types": ["node"]
+  },
+  "include": ["src/server", "src/shared"],
+  "exclude": ["**/*.test.ts"]
+}
+```
+
+Note: `tsc -p tsconfig.server.json` emits `dist/server/**` and `dist/shared/**`; Vite builds the client into `dist/client` — no collision.
+
+**Step 8: Create `vite.config.ts` with Vitest projects**
+
+```ts
+/// <reference types="vitest/config" />
+import react from '@vitejs/plugin-react';
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+  plugins: [react()],
+  build: { outDir: 'dist/client' },
+  server: { proxy: { '/api': 'http://localhost:3001' } },
+  test: {
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: 'server',
+          environment: 'node',
+          include: ['src/server/**/*.test.ts', 'src/shared/**/*.test.ts'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'client',
+          environment: 'jsdom',
+          include: ['src/client/**/*.test.{ts,tsx}'],
+          setupFiles: ['src/client/test/setup.ts'],
+        },
+      },
+    ],
+  },
+});
+```
+
+**Step 9: Create `index.html` (project root — Vite's entry)**
+
+```html
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>iTunes Search</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/client/main.tsx"></script>
+  </body>
+</html>
+```
+
+**Step 10: Create placeholder `src/client/main.tsx`**
+
+```tsx
+import { createRoot } from 'react-dom/client';
+
+const container = document.getElementById('root');
+if (!container) throw new Error('Missing #root element');
+createRoot(container).render(<h1>iTunes Search</h1>);
+```
+
+**Step 11: Create `src/client/test/setup.ts`**
+
+```ts
+import '@testing-library/jest-dom/vitest';
+```
+
+**Step 12: Verify the toolchain**
+
+```bash
+pnpm typecheck
+pnpm lint
+pnpm format:check
+pnpm test
+```
+
+Expected: typecheck, lint and format check pass; `vitest run` reports "No test files found" (a non-zero exit for no tests is fine at this stage — confirm the runner itself starts; tests arrive next task).
+
+**Step 13: CHECKPOINT**
+
+Summarize the tooling choices for Luke (scripts, two tsconfigs, Vitest projects, oxlint/oxfmt) and wait for review + commit.
+
+Suggested message: `chore(redux): scaffold Vite + Express + Vitest + oxlint/oxfmt tooling`
+
+---
+
+### Task 3: Shared types + iTunes normalization
+
+**Files:**
+- Create: `src/shared/types.ts`
+- Create: `src/server/itunes.ts`
+- Test: `src/server/itunes.test.ts`
+
+**Step 1: `src/shared/types.ts` — already done.** It was pulled forward into Task 2 and Luke has since JSDoc'd it; that file is the house style for JSDoc. Skip to Step 2.
+
+**Step 2: Write the failing tests for `normalizeItem`**
+
+Create `src/server/itunes.test.ts`:
+
+```ts
+import { describe, expect, it } from 'vitest';
+import { normalizeItem } from './itunes.js';
+
+describe('normalizeItem', () => {
+  it('normalizes an artist', () => {
+    expect(
+      normalizeItem({ wrapperType: 'artist', artistId: 1, artistName: 'Radiohead', primaryGenreName: 'Alternative' }),
+    ).toEqual({ kind: 'artist', id: 'artist-1', title: 'Radiohead', subtitle: 'Alternative' });
+  });
+
+  it('normalizes an album (collection)', () => {
+    expect(
+      normalizeItem({
+        wrapperType: 'collection',
+        collectionId: 2,
+        collectionName: 'OK Computer',
+        artistName: 'Radiohead',
+        artworkUrl100: 'https://img/ok.jpg',
+      }),
+    ).toEqual({ kind: 'album', id: 'album-2', title: 'OK Computer', subtitle: 'Radiohead', artworkUrl: 'https://img/ok.jpg' });
+  });
+
+  it('normalizes a song (track with kind "song")', () => {
+    expect(
+      normalizeItem({
+        wrapperType: 'track',
+        kind: 'song',
+        trackId: 3,
+        trackName: 'Karma Police',
+        artistName: 'Radiohead',
+        artworkUrl100: 'https://img/kp.jpg',
+      }),
+    ).toEqual({ kind: 'song', id: 'song-3', title: 'Karma Police', subtitle: 'Radiohead', artworkUrl: 'https://img/kp.jpg' });
+  });
+
+  it('rejects non-music tracks: wrapperType "track" alone does not mean song', () => {
+    // Real payloads return movies and TV episodes as wrapperType "track"
+    expect(
+      normalizeItem({ wrapperType: 'track', kind: 'feature-movie', trackId: 9, trackName: 'Thicker Than Water' }),
+    ).toBeNull();
+    expect(
+      normalizeItem({ wrapperType: 'track', kind: 'tv-episode', trackId: 10, trackName: 'Unforgivable Blackness' }),
+    ).toBeNull();
+  });
+
+  it('returns null for unknown wrapper types or missing essentials', () => {
+    expect(normalizeItem({ wrapperType: 'audiobook', collectionId: 5, collectionName: 'A Rare Recording' })).toBeNull();
+    expect(normalizeItem({ wrapperType: 'artist' })).toBeNull(); // no id/name
+    expect(normalizeItem({})).toBeNull();
+  });
+});
+```
+
+**Step 3: Run tests to verify they fail**
+
+```bash
+pnpm vitest run src/server/itunes.test.ts
+```
+
+Expected: FAIL — cannot resolve `./itunes.js`.
+
+**Step 4: Implement `normalizeItem` in `src/server/itunes.ts`**
+
+```ts
+import type { SearchResult } from '../shared/types.js';
+
+/**
+ * The subset of an iTunes Search API result we read. Fields vary by
+ * `wrapperType`/`kind` (a bare search mixes music with movies, TV episodes and
+ * audiobooks), so everything is optional and normalization must discriminate.
+ */
+export interface RawItunesItem {
+  wrapperType?: string;
+  /** Content type within a wrapper, e.g. 'song', 'feature-movie', 'tv-episode'. */
+  kind?: string;
+  artistId?: number;
+  artistName?: string;
+  collectionId?: number;
+  collectionName?: string;
+  trackId?: number;
+  trackName?: string;
+  artworkUrl100?: string;
+  primaryGenreName?: string;
+}
+
+/**
+ * Maps one raw iTunes item to our SearchResult, or null for anything that
+ * isn't a music artist, album, or song (movies and TV episodes also arrive as
+ * wrapperType 'track', so tracks additionally require kind === 'song').
+ */
+export function normalizeItem(item: RawItunesItem): SearchResult | null {
+  switch (item.wrapperType) {
+    case 'artist':
+      if (item.artistId === undefined || !item.artistName) return null;
+      return {
+        kind: 'artist',
+        id: `artist-${item.artistId}`,
+        title: item.artistName,
+        ...(item.primaryGenreName ? { subtitle: item.primaryGenreName } : {}),
+      };
+    case 'collection':
+      if (item.collectionId === undefined || !item.collectionName) return null;
+      return {
+        kind: 'album',
+        id: `album-${item.collectionId}`,
+        title: item.collectionName,
+        ...(item.artistName ? { subtitle: item.artistName } : {}),
+        ...(item.artworkUrl100 ? { artworkUrl: item.artworkUrl100 } : {}),
+      };
+    case 'track':
+      if (item.kind !== 'song' || item.trackId === undefined || !item.trackName) return null;
+      return {
+        kind: 'song',
+        id: `song-${item.trackId}`,
+        title: item.trackName,
+        ...(item.artistName ? { subtitle: item.artistName } : {}),
+        ...(item.artworkUrl100 ? { artworkUrl: item.artworkUrl100 } : {}),
+      };
+    default:
+      return null;
+  }
+}
+```
+
+Design note: `collection` stays discriminated by wrapperType alone — our `entity=album` scoping keeps it music, and audiobooks arrive as `wrapperType: 'audiobook'` (caught by `default`), so there's no music-collection impostor to filter. Tracks get the extra `kind` check because the sample payload proves non-music content shares their wrapper.
+
+**Step 5: Run tests to verify they pass**
+
+```bash
+pnpm vitest run src/server/itunes.test.ts
+```
+
+Expected: PASS (5 tests).
+
+**Step 6: Lint + format, then CHECKPOINT**
+
+```bash
+pnpm lint && pnpm format
+```
+
+Suggested message: `feat(server): shared result types and iTunes payload normalization`
+
+---
+
+### Task 4: De-dupe and interleave
+
+**Files:**
+- Modify: `src/server/itunes.ts`
+- Test: `src/server/itunes.test.ts`
+
+**Step 1: Write the failing tests** (append to `src/server/itunes.test.ts`)
+
+```ts
+import { interleave } from './itunes.js';
+import type { SearchResult } from '../shared/types.js';
+
+const r = (kind: SearchResult['kind'], n: number): SearchResult => ({
+  kind,
+  id: `${kind}-${n}`,
+  title: `${kind} ${n}`,
+});
+
+describe('interleave', () => {
+  it('round-robins artist, album, song', () => {
+    const result = interleave([r('song', 1), r('song', 2), r('artist', 1), r('album', 1)]);
+    expect(result.map((x) => x.id)).toEqual(['artist-1', 'album-1', 'song-1', 'song-2']);
+  });
+
+  it('handles a single kind and empty input', () => {
+    expect(interleave([r('album', 1), r('album', 2)]).map((x) => x.id)).toEqual(['album-1', 'album-2']);
+    expect(interleave([])).toEqual([]);
+  });
+});
+```
+
+(Adjust the existing import line to pull `interleave` alongside `normalizeItem` — one import statement.)
+
+> **Design note (2026-08-31):** a `dedupe` step was originally planned here, but was dropped after verifying empirically that entity-scoped iTunes searches don't return duplicate ids within a call, and kind-prefixed ids (`artist-`/`album-`/`song-`) make cross-call collisions impossible by construction. Bring it back only if duplicates are ever observed.
+
+**Step 2: Run to verify failure**
+
+```bash
+pnpm vitest run src/server/itunes.test.ts
+```
+
+Expected: FAIL — `interleave` not exported.
+
+**Step 3: Implement in `src/server/itunes.ts`**
+
+```ts
+import type { ResultKind, SearchResult } from '../shared/types.js';
+
+const KIND_ORDER: ResultKind[] = ['artist', 'album', 'song'];
+
+export function interleave(results: SearchResult[]): SearchResult[] {
+  const buckets: Record<ResultKind, SearchResult[]> = { artist: [], album: [], song: [] };
+  for (const r of results) buckets[r.kind].push(r);
+  const out: SearchResult[] = [];
+  let added = true;
+  while (added) {
+    added = false;
+    for (const kind of KIND_ORDER) {
+      const next = buckets[kind].shift();
+      if (next) {
+        out.push(next);
+        added = true;
+      }
+    }
+  }
+  return out;
+}
+```
+
+**Step 4: Run tests, expect PASS**
+
+```bash
+pnpm vitest run src/server/itunes.test.ts
+```
+
+**Step 5: Lint + format, then CHECKPOINT**
+
+Suggested message: `feat(server): kind-interleave merged results`
+
+---
+
+### Task 5: iTunes fan-out client (`searchItunes`)
+
+**Files:**
+- Modify: `src/server/itunes.ts`
+- Test: `src/server/itunes.test.ts`
+
+> **Design note (2026-08-31):** originally specced with an injectable `FetchLike` fake; switched to MSW (`msw/node`) so tests intercept at the network boundary and exercise the real fetch path (URL construction, query params, JSON parsing). That made the injection unnecessary, so `searchItunes(term)` just uses global `fetch`.
+
+**Step 1: Install msw** — `pnpm add -D msw`
+
+**Step 2: Write the failing tests** (append)
+
+```ts
+import { afterAll, afterEach, beforeAll } from 'vitest';
+import { http, HttpResponse } from 'msw';
+import { setupServer } from 'msw/node';
+import { searchItunes } from './itunes.js';
+
+const itunesPayload = (results: unknown[]) => ({ resultCount: results.length, results });
+
+const mswServer = setupServer();
+
+beforeAll(() => mswServer.listen({ onUnhandledRequest: 'error' }));
+afterEach(() => mswServer.resetHandlers());
+afterAll(() => mswServer.close());
+
+describe('searchItunes', () => {
+  it('fans out to three entities and returns a merged, interleaved set', async () => {
+    const requestedUrls: URL[] = [];
+    mswServer.use(
+      http.get('https://itunes.apple.com/search', ({ request }) => {
+        const url = new URL(request.url);
+        requestedUrls.push(url);
+        switch (url.searchParams.get('entity')) {
+          case 'musicArtist':
+            return HttpResponse.json(
+              itunesPayload([{ wrapperType: 'artist', artistId: 1, artistName: 'Radiohead' }]),
+            );
+          case 'album':
+            return HttpResponse.json(
+              itunesPayload([{ wrapperType: 'collection', collectionId: 2, collectionName: 'OK Computer', artistName: 'Radiohead' }]),
+            );
+          default:
+            return HttpResponse.json(
+              itunesPayload([{ wrapperType: 'track', kind: 'song', trackId: 3, trackName: 'Karma Police', artistName: 'Radiohead' }]),
+            );
+        }
+      }),
+    );
+
+    const results = await searchItunes('radiohead');
+
+    expect(requestedUrls).toHaveLength(3);
+    expect(requestedUrls.map((u) => u.searchParams.get('entity')).sort()).toEqual(['album', 'musicArtist', 'song']);
+    expect(requestedUrls.every((u) => u.searchParams.get('term') === 'radiohead')).toBe(true);
+    expect(requestedUrls.every((u) => u.searchParams.get('limit') === '50')).toBe(true);
+    expect(results.map((x) => x.kind)).toEqual(['artist', 'album', 'song']);
+  });
+
+  it('throws when any upstream call is not ok', async () => {
+    mswServer.use(
+      http.get('https://itunes.apple.com/search', () => new HttpResponse(null, { status: 503 })),
+    );
+    await expect(searchItunes('x')).rejects.toThrow(/503/);
+  });
+});
+```
+
+**Step 3: Run to verify failure** — `searchItunes` not exported.
+
+**Step 4: Implement** (append to `src/server/itunes.ts`)
+
+```ts
+const ITUNES_URL = 'https://itunes.apple.com/search';
+const ENTITIES = ['musicArtist', 'album', 'song'] as const;
+const UPSTREAM_TIMEOUT_MS = 8000;
+
+export async function searchItunes(term: string): Promise<SearchResult[]> {
+  const payloads = await Promise.all(
+    ENTITIES.map(async (entity) => {
+      const params = new URLSearchParams({ term, entity, limit: '50' });
+      const res = await fetch(`${ITUNES_URL}?${params}`, {
+        signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+      });
+      if (!res.ok) throw new Error(`iTunes responded with ${res.status}`);
+      const body = (await res.json()) as { results?: RawItunesItem[] };
+      return body.results ?? [];
+    }),
+  );
+
+  const normalized = payloads
+    .flat()
+    .map(normalizeItem)
+    .filter((r): r is SearchResult => r !== null);
+
+  return interleave(normalized);
+}
+```
+
+`AbortSignal.timeout` (Node 18+) makes a hung upstream reject after 8s instead of hanging our request; the rejection surfaces through the same catch path as a non-ok response (→ 502). The timeout is documented wiring, not separately tested — MSW handlers can't observe the signal, and faking timers around real network interception buys little.
+
+**Step 5: Run all server tests, expect PASS**
+
+```bash
+pnpm vitest run --project server
+```
+
+**Step 6: Lint + format, then CHECKPOINT**
+
+Suggested message: `feat(server): parallel iTunes fan-out, tested via msw`
+
+---
+
+### Task 6: Search route + `createApp` (supertest)
+
+**Files:**
+- Create: `src/server/routes/search.ts`
+- Create: `src/server/app.ts`
+- Test: `src/server/app.test.ts`
+
+**Step 1: Write the failing tests** — `src/server/app.test.ts`:
+
+```ts
+import request from 'supertest';
+import { describe, expect, it, vi } from 'vitest';
+import { createApp } from './app.js';
+import type { SearchResult } from '../shared/types.js';
+
+const sample: SearchResult[] = [{ kind: 'song', id: 'song-1', title: 'Karma Police', subtitle: 'Radiohead' }];
+
+describe('GET /api/search', () => {
+  it('returns merged results and total for a term', async () => {
+    const search = vi.fn(async () => sample);
+    const res = await request(createApp(search)).get('/api/search').query({ term: 'radiohead' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ results: sample, total: 1 });
+    expect(search).toHaveBeenCalledWith('radiohead');
+  });
+
+  it('returns 400 when term is missing or blank', async () => {
+    const app = createApp(vi.fn(async () => sample));
+    expect((await request(app).get('/api/search')).status).toBe(400);
+    const res = await request(app).get('/api/search').query({ term: '   ' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/term/i);
+  });
+
+  it('returns 502 with a clean body when upstream fails', async () => {
+    const search = vi.fn(async () => {
+      throw new Error('boom');
+    });
+    const res = await request(createApp(search)).get('/api/search').query({ term: 'x' });
+    expect(res.status).toBe(502);
+    expect(res.body).toEqual({ error: 'iTunes search is currently unavailable' });
+  });
+
+  it('returns an empty result set as results: []', async () => {
+    const res = await request(createApp(vi.fn(async () => []))).get('/api/search').query({ term: 'zzz' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ results: [], total: 0 });
+  });
+});
+
+describe('GET /api/health', () => {
+  it('reports ok for the platform health check', async () => {
+    const res = await request(createApp(vi.fn(async () => []))).get('/api/health');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ status: 'ok' });
+  });
+});
+```
+
+**Step 2: Run to verify failure** — cannot resolve `./app.js`.
+
+**Step 3: Implement `src/server/routes/search.ts`**
+
+```ts
+import { Router } from 'express';
+import type { SearchResult } from '../../shared/types.js';
+
+export type Searcher = (term: string) => Promise<SearchResult[]>;
+
+export function createSearchRouter(search: Searcher): Router {
+  const router = Router();
+
+  router.get('/search', async (req, res) => {
+    const term = typeof req.query.term === 'string' ? req.query.term.trim() : '';
+    if (!term) {
+      res.status(400).json({ error: 'Query parameter "term" is required' });
+      return;
+    }
+    try {
+      const results = await search(term);
+      res.json({ results, total: results.length });
+    } catch {
+      res.status(502).json({ error: 'iTunes search is currently unavailable' });
+    }
+  });
+
+  return router;
+}
+```
+
+**Step 4: Implement `src/server/app.ts`**
+
+```ts
+import path from 'node:path';
+import compression from 'compression';
+import express from 'express';
+import helmet from 'helmet';
+import { searchItunes } from './itunes.js';
+import { createSearchRouter, type Searcher } from './routes/search.js';
+
+export function createApp(search: Searcher = (term) => searchItunes(term)): express.Express {
+  const app = express();
+
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+          // Album/track artwork is served from Apple's CDN
+          'img-src': ["'self'", 'data:', 'https://*.mzstatic.com'],
+          // styled-components injects inline <style> at runtime
+          'style-src': ["'self'", "'unsafe-inline'"],
+        },
+      },
+    }),
+  );
+  app.use(compression());
+
+  app.get('/api/health', (_req, res) => {
+    res.json({ status: 'ok' });
+  });
+  app.use('/api', createSearchRouter(search));
+
+  const clientDist = path.resolve(import.meta.dirname, '../client');
+  app.use(express.static(clientDist));
+  app.use((_req, res) => {
+    res.sendFile(path.join(clientDist, 'index.html'));
+  });
+
+  return app;
+}
+```
+
+Note: from `dist/server/app.js`, `../client` is `dist/client` (the Vite build). Express 5 removed `app.get('*')`-style wildcards; the plain `app.use` fallback avoids path-to-regexp entirely. Don't add CORS middleware — same-origin by design. Helmet's CSP defaults cover the rest (`script-src 'self'` suits the Vite build); if a directive name changed in the installed helmet major, follow its README rather than fighting the snippet.
+
+**Step 5: Run, expect PASS**
+
+```bash
+pnpm vitest run --project server
+```
+
+Optionally add one header smoke assertion to an existing test: `expect(res.headers['content-security-policy']).toContain("img-src 'self' data: https://*.mzstatic.com")`.
+
+Note: the 404-fallback `sendFile` is not exercised by these tests (no `dist/client` yet) — prod smoke covers it in Task 12.
+
+**Step 6: Lint + format, then CHECKPOINT**
+
+Suggested message: `feat(server): /api/search and /api/health routes with 400/502 handling and static serving`
+
+---
+
+### Task 7: Server bootstrap + dev smoke test
+
+**Files:**
+- Create: `src/server/index.ts`
+
+**Step 1: Create `src/server/index.ts`**
+
+```ts
+import { createApp } from './app.js';
+
+const port = Number(process.env.PORT ?? 3001);
+
+const server = createApp().listen(port, () => {
+  console.log(`iTunes search server listening on http://localhost:${port}`);
+});
+
+// Render sends SIGTERM on every deploy/restart: stop accepting connections,
+// let in-flight requests finish, then exit.
+process.on('SIGTERM', () => {
+  server.close(() => {
+    process.exit(0);
+  });
+});
+```
+
+(`PORT` from the environment is what Render injects in production — don't hardcode.)
+
+**Step 2: Smoke-test against the real iTunes API**
+
+Start the server in the background, then:
+
+```bash
+curl -s "http://localhost:3001/api/search?term=radiohead" | head -c 400
+curl -s -o /dev/null -w "%{http_code}" "http://localhost:3001/api/search"
+```
+
+Expected: JSON with `results` mixing kinds; second command prints `400`. Stop the server after.
+
+**Step 3: Lint + format, then CHECKPOINT**
+
+Report the smoke-test output to Luke (paste the response snippet).
+
+Suggested message: `feat(server): bootstrap entry point`
+
+---
+
+### Task 8: Redux slice — reducers + thunk
+
+**Files:**
+- Create: `src/client/store/searchSlice.ts`
+- Test: `src/client/store/searchSlice.test.ts`
+
+**Step 1: Write the failing tests** — `src/client/store/searchSlice.test.ts`:
+
+```ts
+import { describe, expect, it } from 'vitest';
+import type { SearchResult } from '../../shared/types';
+import reducer, { PAGE_SIZE, revealMore, searchItunes, type SearchState } from './searchSlice';
+
+const results = (n: number): SearchResult[] =>
+  Array.from({ length: n }, (_, i) => ({ kind: 'song', id: `song-${i}`, title: `Song ${i}` }));
+
+const succeeded = (n: number): SearchState => ({
+  term: 'beatles',
+  status: 'succeeded',
+  results: results(n),
+  visibleCount: PAGE_SIZE,
+});
+
+describe('searchSlice', () => {
+  it('pending resets results, error and visibleCount, and stores the term', () => {
+    const prior: SearchState = { ...succeeded(30), visibleCount: 30, error: 'old' };
+    const state = reducer(prior, searchItunes.pending('req1', 'oasis'));
+    expect(state).toEqual({ term: 'oasis', status: 'loading', results: [], visibleCount: PAGE_SIZE, error: undefined });
+  });
+
+  it('fulfilled stores results', () => {
+    const pending = reducer(undefined, searchItunes.pending('req1', 'beatles'));
+    const state = reducer(pending, searchItunes.fulfilled({ results: results(25), total: 25 }, 'req1', 'beatles'));
+    expect(state.status).toBe('succeeded');
+    expect(state.results).toHaveLength(25);
+    expect(state.visibleCount).toBe(PAGE_SIZE);
+  });
+
+  it('rejected stores the error message', () => {
+    const pending = reducer(undefined, searchItunes.pending('req1', 'beatles'));
+    const state = reducer(pending, searchItunes.rejected(new Error('iTunes search is currently unavailable'), 'req1', 'beatles'));
+    expect(state.status).toBe('failed');
+    expect(state.error).toBe('iTunes search is currently unavailable');
+  });
+
+  it('revealMore adds a page, capped at results.length', () => {
+    expect(reducer(succeeded(25), revealMore()).visibleCount).toBe(20);
+    expect(reducer({ ...succeeded(25), visibleCount: 20 }, revealMore()).visibleCount).toBe(25);
+    expect(reducer(succeeded(4), revealMore()).visibleCount).toBe(4);
+  });
+});
+```
+
+**Step 2: Run to verify failure**
+
+```bash
+pnpm vitest run src/client/store/searchSlice.test.ts
+```
+
+**Step 3: Implement `src/client/store/searchSlice.ts`**
+
+```ts
+import { createAsyncThunk, createSlice } from '@reduxjs/toolkit';
+import type { SearchResponse, SearchResult } from '../../shared/types';
+
+export const PAGE_SIZE = 10;
+
+export interface SearchState {
+  term: string;
+  status: 'idle' | 'loading' | 'succeeded' | 'failed';
+  results: SearchResult[];
+  visibleCount: number;
+  error?: string;
+}
+
+const initialState: SearchState = {
+  term: '',
+  status: 'idle',
+  results: [],
+  visibleCount: PAGE_SIZE,
+};
+
+export const searchItunes = createAsyncThunk<SearchResponse, string>(
+  'search/searchItunes',
+  async (term) => {
+    const res = await fetch(`/api/search?${new URLSearchParams({ term })}`);
+    if (!res.ok) {
+      const body = (await res.json().catch(() => null)) as { error?: string } | null;
+      throw new Error(body?.error ?? `Search failed (${res.status})`);
+    }
+    return (await res.json()) as SearchResponse;
+  },
+);
+
+const searchSlice = createSlice({
+  name: 'search',
+  initialState,
+  reducers: {
+    revealMore(state) {
+      state.visibleCount = Math.min(state.visibleCount + PAGE_SIZE, state.results.length);
+    },
+  },
+  extraReducers: (builder) => {
+    builder
+      .addCase(searchItunes.pending, (state, action) => {
+        state.status = 'loading';
+        state.term = action.meta.arg;
+        state.results = [];
+        state.visibleCount = PAGE_SIZE;
+        state.error = undefined;
+      })
+      .addCase(searchItunes.fulfilled, (state, action) => {
+        state.status = 'succeeded';
+        state.results = action.payload.results;
+      })
+      .addCase(searchItunes.rejected, (state, action) => {
+        state.status = 'failed';
+        state.error = action.error.message ?? 'Search failed';
+      });
+  },
+});
+
+export const { revealMore } = searchSlice.actions;
+export default searchSlice.reducer;
+```
+
+**Step 4: Run, expect PASS.**
+
+**Step 5: Lint + format, then CHECKPOINT**
+
+Suggested message: `feat(client): search slice with async thunk and revealMore`
+
+---
+
+### Task 9: Selectors
+
+**Files:**
+- Modify: `src/client/store/searchSlice.ts`
+- Test: `src/client/store/searchSlice.test.ts`
+
+**Step 1: Write the failing tests** (append; reuse `results`/`succeeded` helpers)
+
+```ts
+import { selectHasMore, selectVisibleResults } from './searchSlice';
+
+describe('selectors', () => {
+  const wrap = (search: SearchState) => ({ search });
+
+  it('selectVisibleResults returns the first visibleCount results', () => {
+    const visible = selectVisibleResults(wrap(succeeded(25)));
+    expect(visible).toHaveLength(PAGE_SIZE);
+    expect(visible[0]?.id).toBe('song-0');
+  });
+
+  it('selectHasMore is true only while more results remain', () => {
+    expect(selectHasMore(wrap(succeeded(25)))).toBe(true);
+    expect(selectHasMore(wrap({ ...succeeded(25), visibleCount: 25 }))).toBe(false);
+    expect(selectHasMore(wrap(succeeded(4)))).toBe(false);
+  });
+});
+```
+
+**Step 2: Run to verify failure.**
+
+**Step 3: Implement** (append to `searchSlice.ts`)
+
+```ts
+interface WithSearch {
+  search: SearchState;
+}
+
+export const selectStatus = (state: WithSearch) => state.search.status;
+export const selectTerm = (state: WithSearch) => state.search.term;
+export const selectError = (state: WithSearch) => state.search.error;
+export const selectVisibleResults = (state: WithSearch) =>
+  state.search.results.slice(0, state.search.visibleCount);
+export const selectHasMore = (state: WithSearch) =>
+  state.search.visibleCount < state.search.results.length;
+```
+
+**Step 4: Run, expect PASS.**
+
+**Step 5: Lint + format, then CHECKPOINT**
+
+Suggested message: `feat(client): visibility selectors`
+
+---
+
+### Task 10: Store + typed hooks + infinite-reveal hook
+
+**Files:**
+- Create: `src/client/store/index.ts`
+- Create: `src/client/hooks/useInfiniteReveal.ts`
+- Create: `src/client/test/mockIntersectionObserver.ts`
+
+No new tests here — `makeStore` and the hook are exercised by the component tests in Task 11 (the hook's behavior is only meaningful in the DOM).
+
+**Step 1: Create `src/client/store/index.ts`**
+
+```ts
+import { configureStore } from '@reduxjs/toolkit';
+import { useDispatch, useSelector } from 'react-redux';
+import searchReducer from './searchSlice';
+
+export const makeStore = () =>
+  configureStore({
+    reducer: { search: searchReducer },
+  });
+
+export type AppStore = ReturnType<typeof makeStore>;
+export type RootState = ReturnType<AppStore['getState']>;
+export type AppDispatch = AppStore['dispatch'];
+
+export const useAppDispatch = useDispatch.withTypes<AppDispatch>();
+export const useAppSelector = useSelector.withTypes<RootState>();
+```
+
+**Step 2: Create `src/client/hooks/useInfiniteReveal.ts`**
+
+```ts
+import { useEffect, useRef } from 'react';
+
+export function useInfiniteReveal(onReveal: () => void, enabled: boolean) {
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!enabled || !el) return;
+
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) onReveal();
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [enabled, onReveal]);
+
+  return sentinelRef;
+}
+```
+
+**Step 3: Create `src/client/test/mockIntersectionObserver.ts`**
+
+```ts
+import { vi } from 'vitest';
+
+export class MockIntersectionObserver {
+  static instances: MockIntersectionObserver[] = [];
+
+  constructor(private callback: IntersectionObserverCallback) {
+    MockIntersectionObserver.instances.push(this);
+  }
+
+  observe = vi.fn();
+  unobserve = vi.fn();
+  disconnect = vi.fn();
+
+  trigger() {
+    this.callback(
+      [{ isIntersecting: true } as IntersectionObserverEntry],
+      this as unknown as IntersectionObserver,
+    );
+  }
+
+  static reset() {
+    MockIntersectionObserver.instances = [];
+  }
+
+  static install() {
+    vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
+  }
+}
+```
+
+**Step 4: Typecheck + lint + format, then CHECKPOINT**
+
+```bash
+pnpm typecheck && pnpm lint && pnpm format
+```
+
+Suggested message: `feat(client): store factory, typed hooks, infinite-reveal hook`
+
+---
+
+### Task 11: Components (semantic markup) + component tests
+
+**Files:**
+- Create: `src/client/components/ResultCard.tsx`
+- Create: `src/client/components/SearchResults.tsx`
+- Create: `src/client/components/SearchForm.tsx`
+- Create: `src/client/App.tsx`
+- Test: `src/client/App.test.tsx`
+
+**Step 1: Write the failing tests** — `src/client/App.test.tsx`:
+
+```tsx
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { Provider } from 'react-redux';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import App from './App';
+import { makeStore } from './store';
+import { MockIntersectionObserver } from './test/mockIntersectionObserver';
+import type { SearchResult } from '../shared/types';
+
+const makeResults = (n: number): SearchResult[] =>
+  Array.from({ length: n }, (_, i) => ({
+    kind: (['artist', 'album', 'song'] as const)[i % 3]!,
+    id: `id-${i}`,
+    title: `Result ${i}`,
+    subtitle: `Sub ${i}`,
+  }));
+
+const stubFetch = (results: SearchResult[]) =>
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ results, total: results.length }),
+    })),
+  );
+
+const renderApp = () => render(
+  <Provider store={makeStore()}>
+    <App />
+  </Provider>,
+);
+
+const search = async (term: string) => {
+  const user = userEvent.setup();
+  await user.type(screen.getByRole('searchbox'), term);
+  await user.click(screen.getByRole('button', { name: /search/i }));
+  return user;
+};
+
+beforeEach(() => {
+  MockIntersectionObserver.install();
+});
+
+afterEach(() => {
+  MockIntersectionObserver.reset();
+  vi.unstubAllGlobals();
+});
+
+describe('App', () => {
+  it('shows the first 10 results with kind badges after a search', async () => {
+    stubFetch(makeResults(25));
+    renderApp();
+    await search('radiohead');
+
+    const list = await screen.findByRole('list', { name: /search results/i });
+    expect(screen.getAllByRole('listitem')).toHaveLength(10);
+    expect(screen.getAllByText('Artist').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Album').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Song').length).toBeGreaterThan(0);
+    expect(list).toBeInTheDocument();
+  });
+
+  it('reveals 10 more when the sentinel intersects', async () => {
+    stubFetch(makeResults(25));
+    renderApp();
+    await search('radiohead');
+    await screen.findByRole('list', { name: /search results/i });
+
+    const observer = MockIntersectionObserver.instances.at(-1)!;
+    const { act } = await import('react');
+    act(() => observer.trigger());
+
+    expect(screen.getAllByRole('listitem')).toHaveLength(20);
+  });
+
+  it('notifies the user when there are no results', async () => {
+    stubFetch([]);
+    renderApp();
+    await search('zzzzzz');
+
+    const status = await screen.findByRole('status');
+    expect(status).toHaveTextContent(/no results found for/i);
+    expect(status).toHaveTextContent('zzzzzz');
+  });
+
+  it('shows the server error message on failure', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        status: 502,
+        json: async () => ({ error: 'iTunes search is currently unavailable' }),
+      })),
+    );
+    renderApp();
+    await search('radiohead');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('iTunes search is currently unavailable');
+  });
+});
+```
+
+**Step 2: Run to verify failure**
+
+```bash
+pnpm vitest run src/client/App.test.tsx
+```
+
+Expected: FAIL — cannot resolve `./App`.
+
+**Step 3: Implement `src/client/components/ResultCard.tsx`**
+
+```tsx
+import type { ResultKind, SearchResult } from '../../shared/types';
+
+const KIND_LABELS: Record<ResultKind, string> = {
+  artist: 'Artist',
+  album: 'Album',
+  song: 'Song',
+};
+
+export function ResultCard({ result }: { result: SearchResult }) {
+  return (
+    <li>
+      <article>
+        {result.artworkUrl && <img src={result.artworkUrl} alt="" width={60} height={60} loading="lazy" />}
+        <div>
+          <span aria-label={`Type: ${KIND_LABELS[result.kind]}`}>{KIND_LABELS[result.kind]}</span>
+          <h2>{result.title}</h2>
+          {result.subtitle && <p>{result.subtitle}</p>}
+        </div>
+      </article>
+    </li>
+  );
+}
+```
+
+**Step 4: Implement `src/client/components/SearchResults.tsx`**
+
+```tsx
+import { useCallback } from 'react';
+import { useInfiniteReveal } from '../hooks/useInfiniteReveal';
+import { useAppDispatch, useAppSelector } from '../store';
+import {
+  revealMore,
+  selectError,
+  selectHasMore,
+  selectStatus,
+  selectTerm,
+  selectVisibleResults,
+} from '../store/searchSlice';
+import { ResultCard } from './ResultCard';
+
+export function SearchResults() {
+  const dispatch = useAppDispatch();
+  const status = useAppSelector(selectStatus);
+  const term = useAppSelector(selectTerm);
+  const error = useAppSelector(selectError);
+  const visible = useAppSelector(selectVisibleResults);
+  const hasMore = useAppSelector(selectHasMore);
+
+  const reveal = useCallback(() => dispatch(revealMore()), [dispatch]);
+  const sentinelRef = useInfiniteReveal(reveal, hasMore);
+
+  if (status === 'idle') return null;
+  if (status === 'loading') return <p role="status">Searching…</p>;
+  if (status === 'failed') return <p role="alert">{error}</p>;
+  if (visible.length === 0) return <p role="status">No results found for “{term}”</p>;
+
+  return (
+    <>
+      <ul aria-label="Search results">
+        {visible.map((result) => (
+          <ResultCard key={result.id} result={result} />
+        ))}
+      </ul>
+      {hasMore && <div ref={sentinelRef} aria-hidden="true" />}
+    </>
+  );
+}
+```
+
+**Step 5: Implement `src/client/components/SearchForm.tsx`**
+
+```tsx
+import { useState, type FormEvent } from 'react';
+import { useAppDispatch } from '../store';
+import { searchItunes } from '../store/searchSlice';
+
+export function SearchForm() {
+  const dispatch = useAppDispatch();
+  const [term, setTerm] = useState('');
+
+  const onSubmit = (event: FormEvent) => {
+    event.preventDefault();
+    const trimmed = term.trim();
+    if (trimmed) dispatch(searchItunes(trimmed));
+  };
+
+  return (
+    <form role="search" onSubmit={onSubmit}>
+      <label htmlFor="search-term">Search artists, albums and songs</label>
+      <input
+        id="search-term"
+        type="search"
+        value={term}
+        onChange={(event) => setTerm(event.target.value)}
+        placeholder="e.g. Radiohead"
+      />
+      <button type="submit">Search</button>
+    </form>
+  );
+}
+```
+
+**Step 6: Implement `src/client/App.tsx`**
+
+```tsx
+import { SearchForm } from './components/SearchForm';
+import { SearchResults } from './components/SearchResults';
+
+export default function App() {
+  return (
+    <>
+      <header>
+        <h1>iTunes Search</h1>
+        <SearchForm />
+      </header>
+      <main>
+        <SearchResults />
+      </main>
+    </>
+  );
+}
+```
+
+**Step 7: Run, expect PASS**
+
+```bash
+pnpm vitest run --project client
+```
+
+**Step 8: Wire up `src/client/main.tsx` for real**
+
+```tsx
+import { createRoot } from 'react-dom/client';
+import { Provider } from 'react-redux';
+import App from './App';
+import { makeStore } from './store';
+
+const container = document.getElementById('root');
+if (!container) throw new Error('Missing #root element');
+
+createRoot(container).render(
+  <Provider store={makeStore()}>
+    <App />
+  </Provider>,
+);
+```
+
+**Step 9: Full suite + typecheck + lint + format, then CHECKPOINT**
+
+```bash
+pnpm test && pnpm typecheck && pnpm lint && pnpm format
+```
+
+Suggested message: `feat(client): search UI with infinite reveal and a11y states`
+
+---
+
+### Task 12: Dev + prod smoke test
+
+**Step 1: Dev smoke** — run `pnpm dev`, open http://localhost:5173, search "radiohead". Expect: 10 mixed-kind rows, scrolling reveals more; a gibberish term shows the no-results notice. (If running non-interactively, verify via `curl http://localhost:5173/api/search?term=radiohead` to prove the proxy, and rely on component tests for UI.)
+
+**Step 2: Prod smoke**
+
+```bash
+pnpm build
+pnpm start
+```
+
+Then `curl -s http://localhost:3001/ | head -c 200` → the built `index.html`; `curl -s "http://localhost:3001/api/search?term=radiohead" | head -c 200` → JSON. Stop the server.
+
+**Step 3: CHECKPOINT** — report both smoke results to Luke. If fixes were needed, they're part of this checkpoint's diff; otherwise there is nothing to commit.
+
+---
+
+### Task 13: Styling with styled-components
+
+**Files:**
+- Create: `src/client/styles/GlobalStyle.ts`
+- Modify: `src/client/App.tsx`, `src/client/components/*.tsx`
+
+**Step 1: Create `src/client/styles/GlobalStyle.ts`**
+
+```ts
+import { createGlobalStyle } from 'styled-components';
+
+export const GlobalStyle = createGlobalStyle`
+  *, *::before, *::after { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    background: #f5f5f7;
+    color: #1d1d1f;
+    line-height: 1.5;
+  }
+`;
+```
+
+**Step 2: Restyle components.** Convert presentation to styled-components while **keeping the element types and ARIA attributes identical** (tests must keep passing). Guidelines, not verbatim requirements:
+
+- `App.tsx`: render `<GlobalStyle />` first; centered column layout, max-width ~40rem.
+- `SearchForm`: visually-hidden label (styled, still in the DOM), rounded search input + button on one row.
+- `SearchResults`: `ul` with `list-style: none; padding: 0; display: grid; gap: 0.5rem;`.
+- `ResultCard`: card row — artwork left (60px, rounded), badge as a small pill whose colour varies by `kind` (prop-based), title/subtitle stacked. Use `article { display: flex; gap: 1rem; }`.
+- Status/error paragraphs: centered, muted; error in a red tone.
+
+Example badge pattern:
+
+```tsx
+const Badge = styled.span<{ $kind: ResultKind }>`
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  color: #fff;
+  background: ${({ $kind }) =>
+    $kind === 'artist' ? '#6e56cf' : $kind === 'album' ? '#0e7490' : '#be185d'};
+`;
+```
+
+**Step 3: Verify** — `pnpm test` (all component tests still green), then `pnpm dev` and eyeball it.
+
+**Step 4: Lint + format, then CHECKPOINT**
+
+Suggested message: `feat(client): styled-components presentation layer`
+
+---
+
+### Task 14: GitHub Actions CI
+
+**Files:**
+- Create: `.github/workflows/ci.yml` (repo root)
+
+**Step 1: Create the workflow**
+
+```yaml
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  redux-app:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: itunes-search-redux
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4 # reads the version from package.json's packageManager field
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: itunes-search-redux/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm format:check
+      - run: pnpm test
+      - run: pnpm build
+```
+
+(A `modernjs-app` job gets added when that app is built.)
+
+**Step 2: Create `.github/dependabot.yml`** — keeps the piece current with near-zero effort; CI is the merge gate for its PRs:
+
+```yaml
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /itunes-search-redux
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+```
+
+**Step 3: Verify locally what CI will run**
+
+```bash
+pnpm install --frozen-lockfile && pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm build
+```
+
+Expected: all green — this is exactly the CI sequence.
+
+**Step 4: CHECKPOINT**
+
+Luke: this is the point to create the GitHub repo and push (CI and Dependabot can't run until the repo is on GitHub). The workflow triggers on `master` and `main`, so either default branch works.
+
+Suggested message: `ci: GitHub Actions workflow and Dependabot for the Redux app`
+
+---
+
+### Task 15: Render Blueprint + deploy
+
+**Files:**
+- Create: `render.yaml` (repo root)
+
+**Step 1: Create `render.yaml`**
+
+```yaml
+services:
+  - type: web
+    name: itunes-search-redux
+    runtime: node
+    plan: free
+    rootDir: itunes-search-redux
+    buildCommand: pnpm install --frozen-lockfile && pnpm build
+    startCommand: pnpm start
+    healthCheckPath: /api/health
+```
+
+(The Modern.js app is added as a second service in this file when it's built. If Render rejects a field name, check their Blueprint spec — field names occasionally shift. Render picks up pnpm from the `packageManager` field in `package.json` via corepack; if the build logs show npm being used instead, the fix is documented in Render's Node docs.)
+
+**Step 2: CHECKPOINT — deploy is Luke's action**
+
+Claude cannot do this part (Render account + GitHub authorization):
+
+1. Commit + push `render.yaml`.
+2. In the Render dashboard: **New → Blueprint**, select the GitHub repo, apply. Render creates the `itunes-search-redux` web service on the free plan with auto-deploy from the default branch.
+3. Wait for the first deploy, then verify: `https://<service>.onrender.com/api/health` → `{"status":"ok"}`, and a search in the browser works end-to-end.
+4. Note the live URL — the README tasks reference it.
+
+Expect free-tier cold starts (~30s after idle) — that's normal and gets documented in the README.
+
+Suggested message: `chore: Render blueprint for the Redux app`
+
+---
+
+### Task 16: App README
+
+**Files:**
+- Create: `itunes-search-redux/README.md`
+
+**Step 1: Write the README.** Cover, briefly and concretely:
+
+- What it is: iTunes music search — artists, albums, songs; 10 at a time with infinite reveal. **Live URL** (from Task 15) up top, with a note that the free tier cold-starts after idle (~30s first load).
+- Quickstart: `pnpm install`, `pnpm dev` (client http://localhost:5173, API :3001), `pnpm build && pnpm start` (everything on :3001), `pnpm test`, `pnpm lint`, `pnpm format`.
+- Deployment: Render web service defined in the root `render.yaml` (build `pnpm install --frozen-lockfile && pnpm build`, start `pnpm start`, health check `/api/health`); auto-deploys from the default branch.
+- Production notes: helmet CSP (Apple artwork CDN allowed), compression, 8s upstream timeout on iTunes calls, graceful SIGTERM shutdown, Dependabot + CI keeping dependencies current.
+- **Conscious omissions** (one line of rationale each): rate limiting (single low-traffic origin behind Render; add express-rate-limit if it ever matters), response caching (iTunes is fast enough and results should feel live; a TTL cache is the obvious next step), structured logging/monitoring beyond the health check (nothing to page anyone about). Documented omissions read as judgement.
+- Architecture: why the Express BFF exists (iTunes API is CORS-blocked in browsers; also merges/normalizes/interleaves so the client stays dumb), why reveal-in-client instead of iTunes `offset` paging (flaky upstream offsets; one fetch per search).
+- Redux notes: Redux Toolkit; `createAsyncThunk` **is** redux-thunk under the hood (dispatches through the thunk middleware) — this satisfies the redux-thunk requirement with current best practice.
+- Testing: the three layers (pure logic, supertest route, component tests) and how to run them.
+
+**Step 2: CHECKPOINT**
+
+Suggested message: `docs(redux): app README`
+
+---
+
+### Task 17: Root README (framing both apps)
+
+**Files:**
+- Create: `README.md` (repo root)
+
+**Step 1: Write it.** Short. Sections:
+
+- **CI badge** (GitHub Actions status) at the top, plus the live Render URL.
+- **One product, two implementations** — `itunes-search-redux/` is the primary submission (React + TS + Redux Toolkit + thunk + Express static serving); `itunes-search-modernjs/` re-implements the same product in Modern.js to show how the architecture maps to a full-stack framework (BFF function replaces the Express server, loaders replace fetch-state plumbing). Note the Modern.js app's status honestly (scaffold / in progress) until it ships — it is currently gitignored, so don't link into it yet.
+- **Requirements recap** — the product requirements from the design doc, including the self-imposed "built for deployment" one.
+- **Where to look** — pointer to each app's README, `render.yaml`, `.github/workflows/ci.yml`, and `docs/plans/` for design history.
+
+**Step 2: CHECKPOINT**
+
+Suggested message: `docs: root README framing both implementations`
+
+---
+
+### Task 18: Final verification + production-readiness sign-off
+
+This is the "can I point people at this and leave it up?" gate. Run every check and report the evidence to Luke — no claim without output.
+
+**Step 1: Local gate** — from `itunes-search-redux/`: `pnpm test && pnpm typecheck && pnpm lint && pnpm format:check && pnpm build` — all green.
+
+**Step 2: CI + deploy gate** — CI green on GitHub for the latest commit; Render shows the latest deploy live.
+
+**Step 3: Live-URL checklist** (replace `<URL>` with the Render URL):
+
+- `curl -s <URL>/api/health` → `{"status":"ok"}`
+- `curl -sI <URL>/` → `content-security-policy` header present (with the mzstatic `img-src`) and other helmet headers (`x-content-type-options`, etc.)
+- `curl -sI -H "Accept-Encoding: gzip" <URL>/` → compressed response (`content-encoding`)
+- `curl -s -o /dev/null -w "%{http_code}" "<URL>/api/search"` → `400`
+- In a browser: real search shows 10 mixed-kind rows with artwork; scrolling reveals more; gibberish term shows the no-results notice; works at a mobile viewport width.
+- Deep link (e.g. `<URL>/anything`) serves the app, not a 404 (index fallback).
+
+**Step 4: Longevity check** — Dependabot config present on GitHub (Insights → Dependency graph → Dependabot); READMEs accurate including live URL, cold-start note, and conscious omissions.
+
+**Step 5:** Report all evidence to Luke; he confirms `git status` is clean after his final commit.
+
+**Step 6:** Use superpowers:requesting-code-review to review the finished app against the design doc before starting the Modern.js plan.
+
+---
+
+## Out of scope for this plan
+
+The Modern.js implementation (build-order step 4) gets its own plan after this one ships and is reviewed — that plan also adds its Render service to `render.yaml` and its job to CI, and removes `itunes-search-modernjs/` from the root `.gitignore` (Luke gitignored it until we come to it) — its BFF/loader shape should mirror what actually got built here. When writing that plan, read `itunes-search-modernjs/AGENTS.md` first: the Modern.js docs ship inside `node_modules/@modern-js/app-tools/docs/` and are the source of truth.
