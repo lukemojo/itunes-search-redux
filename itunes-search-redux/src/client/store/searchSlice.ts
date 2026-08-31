@@ -1,4 +1,4 @@
-import { createAsyncThunk, createSlice } from '@reduxjs/toolkit';
+import { createAsyncThunk, createSelector, createSlice } from '@reduxjs/toolkit';
 import type { SearchResponse, SearchResult } from '../../shared/types';
 
 /** How many merged results each scroll reveals. */
@@ -91,12 +91,16 @@ const searchSlice = createSlice({
         state.error = undefined;
       })
       .addCase(searchItunes.fulfilled, (state, action) => {
+        // Debounced typing overlaps requests: drop any response for a term
+        // that is no longer the one being searched (last-pending wins).
+        if (action.meta.arg !== state.term) return;
         state.status = 'succeeded';
         state.results = action.payload.results;
         state.hasMore = action.payload.hasMore;
         state.next = action.payload.next;
       })
       .addCase(searchItunes.rejected, (state, action) => {
+        if (action.meta.arg !== state.term) return; // stale failure — ignore
         state.status = 'failed';
         state.error = action.error.message ?? 'Search failed';
       })
@@ -136,9 +140,14 @@ export const selectStatus = (state: WithSearch) => state.search.status;
 export const selectTerm = (state: WithSearch) => state.search.term;
 export const selectError = (state: WithSearch) => state.search.error;
 
-/** The revealed window over the loaded results. */
-export const selectVisibleResults = (state: WithSearch) =>
-  state.search.results.slice(0, state.search.visibleCount);
+/**
+ * The revealed window over the loaded results. Memoized: slice() makes a new
+ * array, and useSelector treats a fresh reference as a change (re-renders).
+ */
+export const selectVisibleResults = createSelector(
+  [(state: WithSearch) => state.search.results, (state: WithSearch) => state.search.visibleCount],
+  (results, visibleCount) => results.slice(0, visibleCount),
+);
 
 /** True while scrolling can show more — unrevealed loaded items, or more upstream. */
 export const selectHasMore = (state: WithSearch) =>

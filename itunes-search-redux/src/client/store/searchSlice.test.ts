@@ -69,6 +69,33 @@ describe('searchSlice', () => {
     expect(state.error).toBe('iTunes search is currently unavailable');
   });
 
+  it('ignores a stale fulfilled response for a superseded term', () => {
+    // Search-as-you-type: 'oas' fires, then 'oasis' — the slow 'oas' response lands last
+    let state = reducer(undefined, searchItunes.pending('req1', 'oas'));
+    state = reducer(state, searchItunes.pending('req2', 'oasis'));
+    state = reducer(
+      state,
+      searchItunes.fulfilled({ results: results(5), hasMore: false }, 'req1', 'oas'),
+    );
+    expect(state.status).toBe('loading'); // still waiting on the current term
+    expect(state.results).toHaveLength(0);
+
+    state = reducer(
+      state,
+      searchItunes.fulfilled({ results: results(3), hasMore: false }, 'req2', 'oasis'),
+    );
+    expect(state.status).toBe('succeeded');
+    expect(state.results).toHaveLength(3);
+  });
+
+  it('ignores a stale rejection for a superseded term', () => {
+    let state = reducer(undefined, searchItunes.pending('req1', 'oas'));
+    state = reducer(state, searchItunes.pending('req2', 'oasis'));
+    state = reducer(state, searchItunes.rejected(new Error('boom'), 'req1', 'oas'));
+    expect(state.status).toBe('loading');
+    expect(state.error).toBeUndefined();
+  });
+
   it('revealMore adds a page, capped at results.length', () => {
     expect(reducer(succeeded(25), revealMore()).visibleCount).toBe(20);
     expect(reducer({ ...succeeded(25), visibleCount: 20 }, revealMore()).visibleCount).toBe(25);
