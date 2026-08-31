@@ -31,11 +31,44 @@ root README frames both apps and the relationship between them.
 | Repo shape | One repo, two apps | The Redux/Express app is the primary implementation; the Modern.js app sits alongside it. Root README explains both. |
 | Redux flavour | Redux Toolkit | `createAsyncThunk` is redux-thunk under the hood (README notes this). Current best practice, less boilerplate, easier to test. |
 | Styling | styled-components + semantic HTML | Hand-rolled semantic elements keep the markup fully owned and readable; styled-components for presentation. No component-library div soup. |
-| Search architecture | Express BFF merges; client reveals | One endpoint fans out to iTunes, normalizes, merges. Client fetches once per search, reveals 10 at a time. Avoids iTunes' flaky `offset`. Mirrors Modern.js's BFF concept. |
+| Search architecture | ~~Express BFF merges; client reveals~~ BFF merges; client fetches incrementally + reveals | One endpoint fans out to iTunes, normalizes, merges. ~~Client fetches once per search, reveals 10 at a time. Avoids iTunes' flaky `offset`.~~ **Revised 2026-08-31:** client fetches in growing batches (per-entity limit 20 → 40 → 60…) and reveals 10 at a time between fetches — see *Paging revision* below. Mirrors Modern.js's BFF concept. |
 | Test runner | Vitest | Native to a Vite app; Jest-compatible API so the testing approach is identical. |
 | Result rows | Kind badge shown | Each row displays its type (Artist / Album / Song) alongside the title. |
 | Deployment | Render web services, via `render.yaml` Blueprint | Free tier, no card, deploys straight from GitHub. Each app is one Node web service; the Blueprint keeps the config in the repo (infra-as-code, reviewable). |
 | CI | GitHub Actions | Typecheck, lint, format check, tests and build on every push — green checks visible on the repo. |
+
+## Paging revision (2026-08-31)
+
+The original design fetched 3×50 up front and paged purely client-side, citing
+iTunes' "flaky offset". We revisited this wanting real network data loading —
+and probed the API first:
+
+- **`offset` is non-functional, not flaky**: across 4 term×entity combinations,
+  `offset=10` returned the identical page as `offset=0` (10/10 overlap, every
+  time). Upstream pagination is impossible.
+- **Ordering is not stable across limits**: a `limit=30` response does not match
+  the concatenation of smaller-limit responses, so refetching at a bigger limit
+  can reshuffle items.
+- Same-query responses are CDN-cached and byte-stable on refetch, so repeat
+  calls at a grown limit are cheap upstream.
+
+**Decision — hybrid fetch-and-reveal:**
+
+- Client calls `GET /api/search?term=x&limit=20` (limit = per-entity upstream
+  limit), reveals 10 merged items per scroll, and when the reveal window nears
+  the end of loaded data, prefetches with `limit+20` (20 → 40 → 60, capped at
+  iTunes' max of 200).
+- Step 20 (not 10) because each merged fetch is 3 upstream calls and iTunes
+  rate-limits at ~20 calls/minute; the 10-item headroom between fetch and reveal
+  makes prefetch invisible.
+- **Append-only merge by id in the client**: because ordering shifts between
+  limits, the reducer never replaces the list — it keeps existing items fixed
+  and appends only unseen ids. (De-dupe returns, client-side, with a
+  demonstrated reason to exist.)
+- `SearchResponse` becomes `{ results, hasMore }` — a global total is
+  unknowable; `hasMore` = some entity returned a full page and the cap isn't hit.
+- Conscious trade-off: a fetch at limit N re-downloads the first N−20 items
+  upstream; accepted because responses are CDN-cached and N caps at 200.
 
 ## Repo layout
 
@@ -66,14 +99,18 @@ src/server/
 └── itunes.ts         ← iTunes client + merge logic (pure, injectable fetch)
 ```
 
-- `GET /api/search?term=x` → three parallel iTunes calls (`entity=musicArtist`,
-  `album`, `song`, `limit=50` each) → normalize into a discriminated union
+- `GET /api/search?term=x&limit=20` → three parallel iTunes calls
+  (`entity=musicArtist`, `album`, `song`, the given `limit` each) → normalize
+  into a discriminated union
   `{ kind: 'artist' | 'album' | 'song', id, title, subtitle, artworkUrl?, ... }`
   → interleave by kind (artist, album, song, artist, …) so every page
-  shows a mix → `{ results, total }`. (De-dupe was considered and dropped:
-  entity-scoped searches were verified not to duplicate ids within a call, and
-  kind-prefixed ids can't collide across calls.)
-- Missing/empty `term` → 400. Upstream failure → 502 with clean error body.
+  shows a mix → `{ results, hasMore }`. ~~`limit=50` each → `{ results, total }`~~
+  (revised — see *Paging revision*). (Server-side de-dupe was considered and
+  dropped: entity-scoped searches were verified not to duplicate ids within a
+  call, and kind-prefixed ids can't collide across calls. De-duping across
+  refetches at growing limits is the client reducer's job.)
+- Missing/empty `term` → 400; `limit` optional (default 20), non-numeric or out
+  of range 1–200 → 400. Upstream failure → 502 with clean error body.
 - No CORS hacks: the browser only talks to our origin.
 - `express.static(clientDist)` + index fallback serves the built app.
 - Normalize/merge are pure functions — unit-tested without HTTP.
@@ -95,37 +132,51 @@ src/client/
     └── useInfiniteReveal.ts ← IntersectionObserver on sentinel
 ```
 
-State shape:
+State shape (revised 2026-08-31 — see *Paging revision*; `limit`/`hasMore`
+added, `loadingMore` status added, `results` is append-only):
 
 ```ts
 {
   term: string,
-  status: 'idle' | 'loading' | 'succeeded' | 'failed',
-  results: SearchResult[],   // full merged set from BFF
+  status: 'idle' | 'loading' | 'loadingMore' | 'succeeded' | 'failed',
+  results: SearchResult[],   // loaded so far, append-only merged by id
   visibleCount: number,      // starts at 10
+  limit: number,             // per-entity upstream limit last fetched (20, 40, …)
+  hasMore: boolean,          // server says more may exist upstream
   error?: string
 }
 ```
 
-- `searchItunes = createAsyncThunk(...)` calls `/api/search` via the redux-thunk
-  middleware. `pending` resets results and visibleCount=10; `fulfilled` stores;
-  `rejected` errors.
+- `searchItunes = createAsyncThunk(...)` calls `/api/search?term&limit=20` via
+  the redux-thunk middleware. `pending` resets results, limit and
+  visibleCount=10; `fulfilled` stores; `rejected` errors.
+- `loadMore = createAsyncThunk(...)` refetches with `limit+20`; `fulfilled`
+  merges append-only by id (never replaces — upstream ordering shifts between
+  limits) and stores the server's `hasMore`. A condition guard prevents
+  duplicate in-flight loads. A failed loadMore keeps the shown results.
 - `revealMore` reducer: `visibleCount += 10`, capped at `results.length`.
-- Selectors: `selectVisibleResults`, `selectHasMore`, `selectStatus`.
+- Selectors: `selectVisibleResults`, `selectCanReveal` (unrevealed loaded items
+  remain), `selectShouldLoadMore` (reveal window nears end of loaded data and
+  server `hasMore`), `selectStatus`.
 - `useInfiniteReveal`: IntersectionObserver on a sentinel rendered only while
-  `hasMore`; on intersect, dispatch `revealMore`. No scroll math, no listener churn.
+  more can be revealed or loaded; on intersect, dispatch `revealMore`, and
+  prefetch `loadMore` when the window nears the end. No scroll math, no
+  listener churn.
 - Required states in markup: `<ul aria-label="Search results">`; "No results found
   for '{term}'" in `role="status"` / `aria-live="polite"`; errors and loading likewise.
 
 ## Testing (Vitest throughout)
 
 1. **Pure logic** — normalize/interleave; slice reducers and selectors
-   (reset on new search, revealMore capping, error state). Bulk of coverage.
+   (reset on new search, revealMore capping, append-only merge by id on
+   loadMore, error state). Bulk of coverage.
 2. **BFF route** — supertest vs `createApp()` with stubbed iTunes client: happy path,
-   empty term → 400, upstream failure → 502, empty results → `{ results: [] }`.
+   empty term → 400, bad limit → 400, upstream failure → 502, empty results →
+   `{ results: [] }`.
 3. **Components** — @testing-library/react with real store + mocked fetch:
-   submit → 10 items with kind badges; sentinel intersect → 20; empty → no-results
-   notice. IntersectionObserver mocked with a manual-trigger stub.
+   submit → 10 items with kind badges; sentinel intersect → 20 and a prefetch
+   at a grown limit; empty → no-results notice. IntersectionObserver mocked
+   with a manual-trigger stub.
 
 ## Deployment
 
