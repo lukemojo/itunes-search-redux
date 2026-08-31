@@ -183,7 +183,11 @@ added, `loadingMore` status added, `results` is append-only):
 - `useInfiniteReveal`: IntersectionObserver on a sentinel rendered only while
   more can be revealed or loaded; on intersect, dispatch `revealMore`, and
   prefetch `loadMore` when the window nears the end. No scroll math, no
-  listener churn.
+  listener churn. `rootMargin: '200px 0px'` is load-bearing (2026-08-31): a
+  zero-height sentinel that is the last element on the page sits exactly on
+  the viewport's bottom boundary at max scroll and never strictly enters it —
+  Chrome then reports it non-intersecting and reveals stall after one page
+  (found in a real browser; invisible to jsdom's mocked observer).
 - Required states in markup: `<ul aria-label="Search results">`; "No results found
   for '{term}'" in `role="status"` / `aria-live="polite"`; errors and loading likewise.
 

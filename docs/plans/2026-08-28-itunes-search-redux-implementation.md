@@ -1283,9 +1283,16 @@ export function useInfiniteReveal(onReveal: () => void, enabled: boolean) {
     const el = sentinelRef.current;
     if (!enabled || !el) return;
 
-    const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) onReveal();
-    });
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) onReveal();
+      },
+      // rootMargin extends the trigger zone below the viewport: a zero-height
+      // sentinel at the very bottom of the page sits exactly on the boundary
+      // at max scroll and never strictly enters it (verified in real Chrome —
+      // reveals silently stopped after one page without this).
+      { rootMargin: '200px 0px' },
+    );
     observer.observe(el);
     return () => observer.disconnect();
   }, [enabled, onReveal]);
