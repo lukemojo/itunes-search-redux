@@ -40,7 +40,7 @@ export function createSearchRouter(search: Searcher) {
     // Set the default limit for the search results
     let limit = DEFAULT_LIMIT;
 
-    // If a cursor is provided, attempt to read it and set the limit accordingly. 
+    // If a cursor is provided, attempt to read it and set the limit accordingly.
     // If the cursor is invalid, respond with a 400 Bad Request error.
     if (rawCursor !== undefined) {
       const cursorLimit = typeof rawCursor === 'string' ? readCursor(rawCursor) : null;
