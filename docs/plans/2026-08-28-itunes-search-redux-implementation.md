@@ -602,17 +602,18 @@ Suggested message: `feat(server): parallel iTunes fan-out, tested via msw`
 
 ### Task 6: Paged search API + `createApp` (supertest)
 
-> **Design note (2026-08-31):** revised for the paging revision (see design doc). `SearchResponse` becomes `{ results, hasMore }`, `searchItunes` takes a per-entity `limit`, and the route validates `limit` (default 20, range 1–200).
+> **Design note (2026-08-31):** revised for the paging revision (see design doc, incl. addendum). `SearchResponse` becomes `{ results, hasMore, next? }`, `searchItunes` takes a per-entity `limit`, and the public API never exposes the limit — clients echo an opaque HMAC-signed `cursor`; the route verifies it (400 on tamper) and computes the limit server-side (start 20, step 20, cap 200).
 
 **Files:**
-- Modify: `src/shared/types.ts` (SearchResponse: `total` → `hasMore`)
+- Modify: `src/shared/types.ts` (SearchResponse: `total` → `hasMore` + `next?`)
 - Modify: `src/server/itunes.ts` (searchItunes takes `limit`, returns SearchResponse)
 - Modify: `src/server/itunes.test.ts`
+- Create: `src/server/cursor.ts` + `src/server/cursor.test.ts`
 - Create: `src/server/routes/search.ts`
 - Create: `src/server/app.ts`
 - Test: `src/server/app.test.ts`
 
-**Step 1: Update `src/shared/types.ts`** — in `SearchResponse`, replace the `total` member with `hasMore: boolean` (`/** True while refetching with a larger limit may yield more results. */`). Keep Luke's JSDoc style.
+**Step 1: Update `src/shared/types.ts`** — in `SearchResponse`, replace the `total` member with `hasMore: boolean` (`/** True while refetching with a larger limit may yield more results. */`) and `next?: string` (`/** Opaque signed cursor for the next batch; present only while hasMore. */`). Keep Luke's JSDoc style.
 
 **Step 2: Update the `searchItunes` tests** — the fan-out test asserts `limit` is passed through (`searchItunes('radiohead', 20)` → upstream `limit=20`) and the response shape `{ results, hasMore }`: `hasMore: true` when a mocked entity returns a full page of `limit` items, `false` when all return fewer. Run: FAIL (signature/shape).
 
@@ -640,6 +641,35 @@ export async function searchItunes(term: string, limit: number): Promise<SearchR
 
 Run: PASS.
 
+**Step 3b: Cursor module (TDD)** — `src/server/cursor.test.ts` first: round-trips a limit through an opaque token; rejects tampered payloads (valid signature, altered limit); rejects garbage/malformed tokens; rejects out-of-range limits even when correctly signed. Then `src/server/cursor.ts`:
+
+```ts
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { MAX_LIMIT } from './itunes.js';
+
+// Per-boot secret: zero config, and a restart invalidating in-flight cursors
+// is harmless — the client keeps what it has shown and simply stops paging.
+const SECRET = randomBytes(32);
+
+const sign = (payload: string): string =>
+  createHmac('sha256', SECRET).update(payload).digest('base64url');
+
+export function createCursor(limit: number): string {
+  const payload = String(limit);
+  return `${payload}.${sign(payload)}`;
+}
+
+export function readCursor(token: string): number | null {
+  const [payload, signature] = token.split('.');
+  if (!payload || !signature) return null;
+  const expected = Buffer.from(sign(payload));
+  const received = Buffer.from(signature);
+  if (received.length !== expected.length || !timingSafeEqual(received, expected)) return null;
+  const limit = Number(payload);
+  return Number.isInteger(limit) && limit >= 1 && limit <= MAX_LIMIT ? limit : null;
+}
+```
+
 **Step 4: Write the failing route tests** — `src/server/app.test.ts`:
 
 ```ts
@@ -653,18 +683,39 @@ const respond = (results: SearchResult[], hasMore = false) =>
   vi.fn(async (): Promise<SearchResponse> => ({ results, hasMore }));
 
 describe('GET /api/search', () => {
-  it('returns merged results and hasMore for a term, defaulting limit to 20', async () => {
+  it('starts at limit 20 and hands out an opaque next cursor while hasMore', async () => {
     const search = respond(sample, true);
     const res = await request(createApp(search)).get('/api/search').query({ term: 'radiohead' });
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ results: sample, hasMore: true });
+    expect(res.body).toEqual({ results: sample, hasMore: true, next: expect.any(String) });
     expect(search).toHaveBeenCalledWith('radiohead', 20);
   });
 
-  it('passes an explicit limit through', async () => {
+  it('echoing the next cursor advances the limit server-side (20 → 40 → 60)', async () => {
+    const search = respond(sample, true);
+    const app = createApp(search);
+
+    const first = await request(app).get('/api/search').query({ term: 'radiohead' });
+    const second = await request(app)
+      .get('/api/search')
+      .query({ term: 'radiohead', cursor: first.body.next });
+    expect(search).toHaveBeenLastCalledWith('radiohead', 40);
+
+    await request(app).get('/api/search').query({ term: 'radiohead', cursor: second.body.next });
+    expect(search).toHaveBeenLastCalledWith('radiohead', 60);
+  });
+
+  it('omits the next cursor when there is no more upstream', async () => {
+    const res = await request(createApp(respond(sample, false)))
+      .get('/api/search')
+      .query({ term: 'radiohead' });
+    expect(res.body).toEqual({ results: sample, hasMore: false });
+  });
+
+  it('ignores any limit param a client tries to pass directly', async () => {
     const search = respond(sample);
-    await request(createApp(search)).get('/api/search').query({ term: 'radiohead', limit: '40' });
-    expect(search).toHaveBeenCalledWith('radiohead', 40);
+    await request(createApp(search)).get('/api/search').query({ term: 'radiohead', limit: '200' });
+    expect(search).toHaveBeenCalledWith('radiohead', 20);
   });
 
   it('returns 400 when term is missing or blank', async () => {
@@ -675,12 +726,15 @@ describe('GET /api/search', () => {
     expect(res.body.error).toMatch(/term/i);
   });
 
-  it('returns 400 for a non-numeric or out-of-range limit', async () => {
-    const app = createApp(respond(sample));
-    for (const limit of ['abc', '0', '-5', '201', '1.5']) {
-      const res = await request(app).get('/api/search').query({ term: 'x', limit });
+  it('returns 400 for a fabricated or tampered cursor', async () => {
+    const app = createApp(respond(sample, true));
+    const first = await request(app).get('/api/search').query({ term: 'x' });
+    const signature = (first.body.next as string).split('.')[1]!;
+
+    for (const cursor of ['garbage', '200', `200.${signature}`]) {
+      const res = await request(app).get('/api/search').query({ term: 'x', cursor });
       expect(res.status).toBe(400);
-      expect(res.body.error).toMatch(/limit/i);
+      expect(res.body.error).toMatch(/cursor/i);
     }
   });
 
@@ -716,11 +770,14 @@ Run: FAIL — cannot resolve `./app.js`.
 ```ts
 import { Router } from 'express';
 import type { SearchResponse } from '../../shared/types.js';
+import { createCursor, readCursor } from '../cursor.js';
 import { MAX_LIMIT } from '../itunes.js';
 
 export type Searcher = (term: string, limit: number) => Promise<SearchResponse>;
 
+/** A fresh search always starts here; each next cursor advances by STEP. */
 const DEFAULT_LIMIT = 20;
+const STEP = 20;
 
 export function createSearchRouter(search: Searcher): Router {
   const router = Router();
@@ -732,15 +789,24 @@ export function createSearchRouter(search: Searcher): Router {
       return;
     }
 
-    const rawLimit = req.query.limit;
-    const limit = rawLimit === undefined ? DEFAULT_LIMIT : Number(rawLimit);
-    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIMIT) {
-      res.status(400).json({ error: `Query parameter "limit" must be an integer between 1 and ${MAX_LIMIT}` });
-      return;
+    const rawCursor = req.query.cursor;
+    let limit = DEFAULT_LIMIT;
+    if (rawCursor !== undefined) {
+      const cursorLimit = typeof rawCursor === 'string' ? readCursor(rawCursor) : null;
+      if (cursorLimit === null) {
+        res.status(400).json({ error: 'Query parameter "cursor" is invalid' });
+        return;
+      }
+      limit = cursorLimit;
     }
 
     try {
-      res.json(await search(term, limit));
+      const { results, hasMore } = await search(term, limit);
+      res.json({
+        results,
+        hasMore,
+        ...(hasMore ? { next: createCursor(Math.min(limit + STEP, MAX_LIMIT)) } : {}),
+      } satisfies SearchResponse);
     } catch {
       res.status(502).json({ error: 'iTunes search is currently unavailable' });
     }
@@ -807,7 +873,7 @@ Note: the 404-fallback `sendFile` is not exercised by these tests (no `dist/clie
 
 **Step 8: Lint + format, then CHECKPOINT**
 
-Suggested message: `feat(server): paged /api/search and /api/health with 400/502 handling and static serving`
+Suggested message: `feat(server): cursor-paged /api/search and /api/health with 400/502 handling and static serving`
 
 ---
 
@@ -844,11 +910,11 @@ Start the server in the background, then:
 
 ```bash
 curl -s "http://localhost:3001/api/search?term=radiohead" | head -c 400
-curl -s "http://localhost:3001/api/search?term=radiohead&limit=40" | head -c 120
 curl -s -o /dev/null -w "%{http_code}" "http://localhost:3001/api/search"
+curl -s -o /dev/null -w "%{http_code}" "http://localhost:3001/api/search?term=x&cursor=forged"
 ```
 
-Expected: JSON with `results` mixing kinds and a `hasMore` boolean; the `limit=40` call returns more items; last command prints `400`. Stop the server after.
+Expected: first response is JSON with `results` mixing kinds, a `hasMore` boolean, and a signed `next` cursor (follow it with `curl "...&cursor=<next>"` to see the batch grow); the last two commands print `400`. Stop the server after.
 
 **Step 3: Lint + format, then CHECKPOINT**
 
@@ -860,7 +926,7 @@ Suggested message: `feat(server): bootstrap entry point`
 
 ### Task 8: Redux slice — reducers + thunks
 
-> **Design note (2026-08-31):** revised for the paging revision — two thunks (`searchItunes` fresh at limit 20, `loadMore` at limit+20 with append-only merge by id), `limit`/`hasMore`/`loadingMore` in state.
+> **Design note (2026-08-31):** revised for the paging revision — two thunks (`searchItunes` fresh, `loadMore` echoing the server's signed `next` cursor, with append-only merge by id), `next`/`hasMore`/`loadingMore` in state. The client never sees a limit; a failed loadMore keeps shown results and stops paging (no retry loop).
 
 **Files:**
 - Create: `src/client/store/searchSlice.ts`
@@ -872,7 +938,6 @@ Suggested message: `feat(server): bootstrap entry point`
 import { describe, expect, it } from 'vitest';
 import type { SearchResult } from '../../shared/types';
 import reducer, {
-  FETCH_STEP,
   PAGE_SIZE,
   loadMore,
   revealMore,
@@ -888,31 +953,35 @@ const succeeded = (n: number, hasMore = false): SearchState => ({
   status: 'succeeded',
   results: results(n),
   visibleCount: PAGE_SIZE,
-  limit: FETCH_STEP,
   hasMore,
+  ...(hasMore ? { next: 'signed-cursor' } : {}),
 });
 
 describe('searchSlice', () => {
-  it('search pending resets results, error, limit and visibleCount, and stores the term', () => {
-    const prior: SearchState = { ...succeeded(30, true), visibleCount: 30, limit: 60, error: 'old' };
+  it('search pending resets results, error, cursor and visibleCount, and stores the term', () => {
+    const prior: SearchState = { ...succeeded(30, true), visibleCount: 30, error: 'old' };
     const state = reducer(prior, searchItunes.pending('req1', 'oasis'));
     expect(state).toEqual({
       term: 'oasis',
       status: 'loading',
       results: [],
       visibleCount: PAGE_SIZE,
-      limit: FETCH_STEP,
       hasMore: false,
+      next: undefined,
       error: undefined,
     });
   });
 
-  it('search fulfilled stores results and hasMore', () => {
+  it('search fulfilled stores results, hasMore and the next cursor', () => {
     const pending = reducer(undefined, searchItunes.pending('req1', 'beatles'));
-    const state = reducer(pending, searchItunes.fulfilled({ results: results(25), hasMore: true }, 'req1', 'beatles'));
+    const state = reducer(
+      pending,
+      searchItunes.fulfilled({ results: results(25), hasMore: true, next: 'abc.sig' }, 'req1', 'beatles'),
+    );
     expect(state.status).toBe('succeeded');
     expect(state.results).toHaveLength(25);
     expect(state.hasMore).toBe(true);
+    expect(state.next).toBe('abc.sig');
     expect(state.visibleCount).toBe(PAGE_SIZE);
   });
 
@@ -939,17 +1008,20 @@ describe('searchSlice', () => {
     expect(state.status).toBe('succeeded');
     expect(state.results.slice(0, 20)).toEqual(prior.results); // untouched
     expect(state.results).toHaveLength(30); // 20 kept + 10 genuinely new
-    expect(state.limit).toBe(FETCH_STEP * 2);
     expect(state.hasMore).toBe(false);
+    expect(state.next).toBeUndefined(); // upstream exhausted — no further cursor
     expect(state.visibleCount).toBe(PAGE_SIZE); // loading more never reveals
   });
 
-  it('loadMore rejected keeps the shown results and stays succeeded', () => {
+  it('loadMore rejected keeps the shown results, stays succeeded, and stops paging', () => {
     const pending = reducer(succeeded(20, true), loadMore.pending('req2'));
     const state = reducer(pending, loadMore.rejected(new Error('boom'), 'req2'));
     expect(state.status).toBe('succeeded');
     expect(state.results).toHaveLength(20);
     expect(state.error).toBe('boom');
+    // A dead cursor (e.g. server restarted) must not retry-loop
+    expect(state.hasMore).toBe(false);
+    expect(state.next).toBeUndefined();
   });
 });
 ```
@@ -968,18 +1040,16 @@ import type { SearchResponse, SearchResult } from '../../shared/types';
 
 /** How many merged results each scroll reveals. */
 export const PAGE_SIZE = 10;
-/** How much the per-entity upstream limit grows per loadMore (20 → 40 → 60…). */
-export const FETCH_STEP = 20;
 
 export interface SearchState {
   term: string;
   status: 'idle' | 'loading' | 'loadingMore' | 'succeeded' | 'failed';
-  /** Loaded so far — append-only merged by id (upstream ordering shifts between limits). */
+  /** Loaded so far — append-only merged by id (upstream ordering shifts between fetches). */
   results: SearchResult[];
   visibleCount: number;
-  /** Per-entity upstream limit of the last completed fetch. */
-  limit: number;
-  /** Server says a larger limit may yield more. */
+  /** Opaque server cursor for the next batch; absent when upstream is exhausted. */
+  next?: string;
+  /** Server says a refetch may yield more. */
   hasMore: boolean;
   error?: string;
 }
@@ -989,12 +1059,12 @@ const initialState: SearchState = {
   status: 'idle',
   results: [],
   visibleCount: PAGE_SIZE,
-  limit: FETCH_STEP,
   hasMore: false,
 };
 
-async function fetchSearch(term: string, limit: number): Promise<SearchResponse> {
-  const res = await fetch(`/api/search?${new URLSearchParams({ term, limit: String(limit) })}`);
+async function fetchSearch(term: string, cursor?: string): Promise<SearchResponse> {
+  const params = new URLSearchParams({ term, ...(cursor ? { cursor } : {}) });
+  const res = await fetch(`/api/search?${params}`);
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string } | null;
     throw new Error(body?.error ?? `Search failed (${res.status})`);
@@ -1002,26 +1072,26 @@ async function fetchSearch(term: string, limit: number): Promise<SearchResponse>
   return (await res.json()) as SearchResponse;
 }
 
-/** Fresh search: fetches the first batch (limit 20) and resets all paging state. */
+/** Fresh search: fetches the first batch and resets all paging state. */
 export const searchItunes = createAsyncThunk<SearchResponse, string>(
   'search/searchItunes',
-  (term) => fetchSearch(term, FETCH_STEP),
+  (term) => fetchSearch(term),
 );
 
 /**
- * Refetches the current term at limit+20 to extend the loaded set. Guarded so
- * only one load runs at a time and only while the server reports more.
+ * Extends the loaded set by echoing the server's signed cursor. Guarded so
+ * only one load runs at a time and only while a cursor exists.
  */
 export const loadMore = createAsyncThunk<SearchResponse, void, { state: { search: SearchState } }>(
   'search/loadMore',
   (_, { getState }) => {
-    const { term, limit } = getState().search;
-    return fetchSearch(term, limit + FETCH_STEP);
+    const { term, next } = getState().search;
+    return fetchSearch(term, next);
   },
   {
     condition: (_, { getState }) => {
-      const { status, hasMore } = getState().search;
-      return status === 'succeeded' && hasMore;
+      const { status, next } = getState().search;
+      return status === 'succeeded' && next !== undefined;
     },
   },
 );
@@ -1041,7 +1111,7 @@ const searchSlice = createSlice({
         state.term = action.meta.arg;
         state.results = [];
         state.visibleCount = PAGE_SIZE;
-        state.limit = FETCH_STEP;
+        state.next = undefined;
         state.hasMore = false;
         state.error = undefined;
       })
@@ -1049,6 +1119,7 @@ const searchSlice = createSlice({
         state.status = 'succeeded';
         state.results = action.payload.results;
         state.hasMore = action.payload.hasMore;
+        state.next = action.payload.next;
       })
       .addCase(searchItunes.rejected, (state, action) => {
         state.status = 'failed';
@@ -1059,8 +1130,8 @@ const searchSlice = createSlice({
       })
       .addCase(loadMore.fulfilled, (state, action) => {
         state.status = 'succeeded';
-        state.limit += FETCH_STEP;
         state.hasMore = action.payload.hasMore;
+        state.next = action.payload.next;
         // Append-only merge: never reorder or replace what the user has seen.
         const seen = new Set(state.results.map((result) => result.id));
         for (const result of action.payload.results) {
@@ -1069,7 +1140,10 @@ const searchSlice = createSlice({
       })
       .addCase(loadMore.rejected, (state, action) => {
         // Keep what's shown; surface the error without blowing the list away.
+        // Drop the cursor so a dead one (e.g. server restart) can't retry-loop.
         state.status = 'succeeded';
+        state.hasMore = false;
+        state.next = undefined;
         state.error = action.error.message ?? 'Loading more failed';
       });
   },
@@ -1284,11 +1358,13 @@ const makeResults = (n: number): SearchResult[] =>
     subtitle: `Sub ${i}`,
   }));
 
-/** Stubs fetch to answer each /api/search call by its requested limit. */
-const stubFetch = (respond: (limit: number) => { results: SearchResult[]; hasMore: boolean }) => {
+/** Stubs fetch to answer each /api/search call by the cursor it carries (null = fresh search). */
+const stubFetch = (
+  respond: (cursor: string | null) => { results: SearchResult[]; hasMore: boolean; next?: string },
+) => {
   const fetchMock = vi.fn(async (url: string) => {
-    const limit = Number(new URL(url, 'http://localhost').searchParams.get('limit'));
-    return { ok: true, status: 200, json: async () => respond(limit) };
+    const cursor = new URL(url, 'http://localhost').searchParams.get('cursor');
+    return { ok: true, status: 200, json: async () => respond(cursor) };
   });
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
@@ -1348,16 +1424,18 @@ describe('App', () => {
 
   it('prefetches the next batch when the reveal window nears the end of loaded data', async () => {
     // First batch loads 15 with more upstream: 5 unrevealed after the initial 10,
-    // so the prefetch trigger fires immediately and grows the limit to 40.
-    const fetchMock = stubFetch((limit) =>
-      limit <= 20 ? { results: makeResults(15), hasMore: true } : { results: makeResults(35), hasMore: false },
+    // so the prefetch trigger fires immediately, echoing the server's cursor.
+    const fetchMock = stubFetch((cursor) =>
+      cursor === null
+        ? { results: makeResults(15), hasMore: true, next: 'cursor-40' }
+        : { results: makeResults(35), hasMore: false },
     );
     renderApp();
     await search('radiohead');
     await screen.findByRole('list', { name: /search results/i });
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('limit=40');
+    expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('cursor=cursor-40');
 
     // The appended batch is revealable on the next intersect
     const observer = MockIntersectionObserver.instances.at(-1)!;
@@ -1573,7 +1651,7 @@ Suggested message: `feat(client): search UI with infinite reveal and a11y states
 
 ### Task 12: Dev + prod smoke test
 
-**Step 1: Dev smoke** — run `pnpm dev`, open http://localhost:5173, search "radiohead". Expect: 10 mixed-kind rows, scrolling reveals more, and the network tab shows growing-limit fetches (`limit=20`, then `limit=40` as scrolling continues); a gibberish term shows the no-results notice. (If running non-interactively, verify via `curl http://localhost:5173/api/search?term=radiohead` to prove the proxy, and rely on component tests for UI.)
+**Step 1: Dev smoke** — run `pnpm dev`, open http://localhost:5173, search "radiohead". Expect: 10 mixed-kind rows, scrolling reveals more, and the network tab shows growing batches (a bare fetch, then `cursor=…` fetches as scrolling continues); a gibberish term shows the no-results notice. (If running non-interactively, verify via `curl http://localhost:5173/api/search?term=radiohead` to prove the proxy, and rely on component tests for UI.)
 
 **Step 2: Prod smoke**
 
@@ -1761,7 +1839,7 @@ Suggested message: `chore: Render blueprint for the Redux app`
 - Deployment: Render web service defined in the root `render.yaml` (build `pnpm install --frozen-lockfile && pnpm build`, start `pnpm start`, health check `/api/health`); auto-deploys from the default branch.
 - Production notes: helmet CSP (Apple artwork CDN allowed), compression, 8s upstream timeout on iTunes calls, graceful SIGTERM shutdown, Dependabot + CI keeping dependencies current.
 - **Conscious omissions** (one line of rationale each): rate limiting (single low-traffic origin behind Render; add express-rate-limit if it ever matters), response caching (iTunes is fast enough and results should feel live; a TTL cache is the obvious next step), structured logging/monitoring beyond the health check (nothing to page anyone about). Documented omissions read as judgement.
-- Architecture: why the Express BFF exists (iTunes API is CORS-blocked in browsers; also merges/normalizes/interleaves so the client stays dumb), and the paging story: iTunes `offset` is non-functional (verified empirically — identical pages at every offset), so the client fetches in growing batches (limit 20 → 40 → 60) with 10-at-a-time reveal and append-only merge by id (upstream ordering shifts between limits).
+- Architecture: why the Express BFF exists (iTunes API is CORS-blocked in browsers; also merges/normalizes/interleaves so the client stays dumb), and the paging story: iTunes `offset` is non-functional (verified empirically — identical pages at every offset), so the client fetches in growing batches (limit 20 → 40 → 60, server-owned via opaque signed cursors — clients can't jump the queue) with 10-at-a-time reveal and append-only merge by id (upstream ordering shifts between limits).
 - Redux notes: Redux Toolkit; `createAsyncThunk` **is** redux-thunk under the hood (dispatches through the thunk middleware) — this satisfies the redux-thunk requirement with current best practice.
 - Testing: the three layers (pure logic, supertest route, component tests) and how to run them.
 

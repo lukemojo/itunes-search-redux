@@ -54,10 +54,10 @@ and probed the API first:
 
 **Decision — hybrid fetch-and-reveal:**
 
-- Client calls `GET /api/search?term=x&limit=20` (limit = per-entity upstream
-  limit), reveals 10 merged items per scroll, and when the reveal window nears
-  the end of loaded data, prefetches with `limit+20` (20 → 40 → 60, capped at
-  iTunes' max of 200).
+- Client calls `GET /api/search?term=x` ~~`&limit=20`~~, reveals 10 merged
+  items per scroll, and when the reveal window nears the end of loaded data,
+  prefetches the next batch (per-entity limit 20 → 40 → 60, capped at iTunes'
+  max of 200) — by echoing the server's opaque `cursor` (see addendum below).
 - Step 20 (not 10) because each merged fetch is 3 upstream calls and iTunes
   rate-limits at ~20 calls/minute; the 10-item headroom between fetch and reveal
   makes prefetch invisible.
@@ -65,10 +65,23 @@ and probed the API first:
   limits, the reducer never replaces the list — it keeps existing items fixed
   and appends only unseen ids. (De-dupe returns, client-side, with a
   demonstrated reason to exist.)
-- `SearchResponse` becomes `{ results, hasMore }` — a global total is
+- `SearchResponse` becomes `{ results, hasMore, next? }` — a global total is
   unknowable; `hasMore` = some entity returned a full page and the cap isn't hit.
 - Conscious trade-off: a fetch at limit N re-downloads the first N−20 items
   upstream; accepted because responses are CDN-cached and N caps at 200.
+
+**Addendum (2026-08-31): server-managed limits via signed cursors.** The first
+cut exposed `?limit=` directly, which lets anyone jump straight to an immediate
+3×200 fetch. Decision: the limit never appears in the public API. Each response
+with `hasMore` carries `next` — an opaque HMAC-signed token (Node `crypto`,
+per-boot secret) encoding the next per-entity limit. Load-more echoes it back
+as `?cursor=`; the server verifies the signature and uses the limit *it*
+embedded, so a fabricated or tampered cursor is a 400 and a fresh client always
+starts at 20. Paging policy (start, step, cap) is 100% server-owned. Per-boot
+secret means cursors die on restart/deploy; the client degrades gracefully — a
+failed load-more keeps what's shown and stops paging (no retry loop). Fast
+scrolling to 200 via genuine progression remains an accepted risk (public data,
+bounded cost; rate limiting stays a documented omission).
 
 ## Repo layout
 
@@ -99,18 +112,20 @@ src/server/
 └── itunes.ts         ← iTunes client + merge logic (pure, injectable fetch)
 ```
 
-- `GET /api/search?term=x&limit=20` → three parallel iTunes calls
-  (`entity=musicArtist`, `album`, `song`, the given `limit` each) → normalize
+- `GET /api/search?term=x[&cursor=…]` → three parallel iTunes calls
+  (`entity=musicArtist`, `album`, `song`, the server-decided `limit` each) → normalize
   into a discriminated union
   `{ kind: 'artist' | 'album' | 'song', id, title, subtitle, artworkUrl?, ... }`
   → interleave by kind (artist, album, song, artist, …) so every page
-  shows a mix → `{ results, hasMore }`. ~~`limit=50` each → `{ results, total }`~~
+  shows a mix → `{ results, hasMore, next? }`. ~~`limit=50` each → `{ results, total }`~~
   (revised — see *Paging revision*). (Server-side de-dupe was considered and
   dropped: entity-scoped searches were verified not to duplicate ids within a
   call, and kind-prefixed ids can't collide across calls. De-duping across
   refetches at growing limits is the client reducer's job.)
-- Missing/empty `term` → 400; `limit` optional (default 20), non-numeric or out
-  of range 1–200 → 400. Upstream failure → 502 with clean error body.
+- Missing/empty `term` → 400; ~~`limit` optional (default 20), non-numeric or
+  out of range 1–200 → 400~~ `cursor` optional (absent = first page at limit
+  20), invalid signature → 400 (see *Paging revision addendum*). Upstream
+  failure → 502 with clean error body.
 - No CORS hacks: the browser only talks to our origin.
 - `express.static(clientDist)` + index fallback serves the built app.
 - Normalize/merge are pure functions — unit-tested without HTTP.
@@ -141,19 +156,20 @@ added, `loadingMore` status added, `results` is append-only):
   status: 'idle' | 'loading' | 'loadingMore' | 'succeeded' | 'failed',
   results: SearchResult[],   // loaded so far, append-only merged by id
   visibleCount: number,      // starts at 10
-  limit: number,             // per-entity upstream limit last fetched (20, 40, …)
+  next?: string,             // opaque server cursor for the next batch
   hasMore: boolean,          // server says more may exist upstream
   error?: string
 }
 ```
 
-- `searchItunes = createAsyncThunk(...)` calls `/api/search?term&limit=20` via
-  the redux-thunk middleware. `pending` resets results, limit and
-  visibleCount=10; `fulfilled` stores; `rejected` errors.
-- `loadMore = createAsyncThunk(...)` refetches with `limit+20`; `fulfilled`
-  merges append-only by id (never replaces — upstream ordering shifts between
-  limits) and stores the server's `hasMore`. A condition guard prevents
-  duplicate in-flight loads. A failed loadMore keeps the shown results.
+- `searchItunes = createAsyncThunk(...)` calls `/api/search?term` via the
+  redux-thunk middleware. `pending` resets results, cursor and visibleCount=10;
+  `fulfilled` stores results, `hasMore` and `next`; `rejected` errors.
+- `loadMore = createAsyncThunk(...)` refetches echoing the stored `next`
+  cursor; `fulfilled` merges append-only by id (never replaces — upstream
+  ordering shifts between limits) and stores the new `hasMore`/`next`. A
+  condition guard prevents duplicate in-flight loads. A failed loadMore keeps
+  the shown results and stops paging (no retry loop).
 - `revealMore` reducer: `visibleCount += 10`, capped at `results.length`.
 - Selectors: `selectVisibleResults`, `selectCanReveal` (unrevealed loaded items
   remain), `selectShouldLoadMore` (reveal window nears end of loaded data and
