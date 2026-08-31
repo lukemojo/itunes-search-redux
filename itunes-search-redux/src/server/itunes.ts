@@ -1,4 +1,4 @@
-import type { ResultKind, SearchResult } from '../shared/types.js';
+import type { ResultKind, SearchResponse, SearchResult } from '../shared/types.js';
 
 /**
  * The subset of an iTunes Search API result.
@@ -87,9 +87,14 @@ const ITUNES_URL = 'https://itunes.apple.com/search';
 const ENTITIES = ['musicArtist', 'album', 'song'] as const;
 const UPSTREAM_TIMEOUT_MS = 8000;
 
+/** iTunes rejects limits above 200, so paging stops there. */
+export const MAX_LIMIT = 200;
+
 /**
  * Searches iTunes for a term with three parallel entity-scoped calls
  * (musicArtist, album, song), then normalizes and interleaves the merged set.
+ * `limit` is per entity; `hasMore` means refetching with a larger limit may
+ * yield more. Refetch acts as pagination as there is no valid pagination mechanism.
  * Must run server-side: iTunes CORS-blocks browsers. Each upstream call is
  * abandoned after 8s via AbortSignal.timeout.
  */
@@ -113,11 +118,17 @@ export async function searchItunes(term: string, limit = 20) {
     }),
   );
 
+  // A full raw page from any entity means a larger limit may yield more
+  const hasMore = limit < MAX_LIMIT && payloads.some((items) => items.length >= limit);
+
   // Normalize the raw iTunes items to our SearchResult type, filtering out any nulls
   const normalized = payloads
     .flat()
     .map(normalizeItem)
     .filter((result): result is SearchResult => result !== null);
 
-  return interleave(normalized);
+  // Interleave the normalized results to ensure a balanced representation of artists, albums, and songs
+  const data: SearchResponse = { results: interleave(normalized), hasMore };
+
+  return data;
 }

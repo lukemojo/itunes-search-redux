@@ -125,7 +125,7 @@ describe('searchItunes', () => {
     mswServer.events.on('request:start', listener);
 
     // Call the searchItunes function with a test term
-    const results = await searchItunes('radiohead');
+    const { results, hasMore } = await searchItunes('radiohead');
 
     // Assert that three requests were made, one for each entity type
     expect(requestedUrls).toHaveLength(3);
@@ -144,8 +144,45 @@ describe('searchItunes', () => {
     // Assert that the results are interleaved correctly based on the mocked data
     expect(results.map((x) => x.kind)).toEqual(['artist', 'album', 'song']);
 
+    // No entity filled its 20-item page, so there is nothing more upstream
+    expect(hasMore).toBe(false);
+
     // Remove the listener after the test to avoid side effects
     mswServer.events.removeListener('request:start', listener);
+  });
+
+  it('passes the limit through and reports hasMore when any entity fills its page', async () => {
+    const requestedUrls: URL[] = [];
+    const listener = ({ request }: { request: Request }) => {
+      requestedUrls.push(new URL(request.url));
+    };
+    mswServer.events.on('request:start', listener);
+
+    // Each default handler returns exactly 1 item, so limit=1 pages are full
+    const { hasMore } = await searchItunes('radiohead', 1);
+
+    expect(requestedUrls.every((u) => u.searchParams.get('limit') === '1')).toBe(true);
+    expect(hasMore).toBe(true);
+
+    mswServer.events.removeListener('request:start', listener);
+  });
+
+  it('reports hasMore false at the 200 cap even when pages are full', async () => {
+    const fullPage = Array.from({ length: 200 }, (_, i) => ({
+      wrapperType: 'track',
+      kind: 'song',
+      trackId: i,
+      trackName: `Song ${i}`,
+    }));
+    mswServer.use(
+      http.get('https://itunes.apple.com/search', () =>
+        HttpResponse.json({ resultCount: fullPage.length, results: fullPage }),
+      ),
+    );
+
+    const { hasMore } = await searchItunes('radiohead', 200);
+
+    expect(hasMore).toBe(false);
   });
 
   it('throws when any upstream call is not ok', async () => {

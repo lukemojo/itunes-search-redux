@@ -22,6 +22,8 @@ export interface SearchResult {
 export interface SearchResponse {
   /** The array of search results. */
   results: SearchResult[];
-  /** The total number of results available. */
-  total: number;
+  /** True while refetching with a larger limit may yield more results. */
+  hasMore: boolean;
+  /** Opaque signed cursor for the next batch; present only while hasMore. */
+  next?: string;
 }
