@@ -60,7 +60,7 @@ const KIND_ORDER: ResultKind[] = ['artist', 'album', 'song'];
  * Round-robins results across kinds (artist, album, song) so one plentiful
  * kind can't dominate the merged list; relative order within a kind is kept.
  */
-export function interleave(results: SearchResult[]): SearchResult[] {
+export function interleave(results: SearchResult[]) {
   // Create a bucket for each kind and fill it with the results of that kind
   const buckets: Record<ResultKind, SearchResult[]> = { artist: [], album: [], song: [] };
 
@@ -81,4 +81,43 @@ export function interleave(results: SearchResult[]): SearchResult[] {
     }
   }
   return out;
+}
+
+const ITUNES_URL = 'https://itunes.apple.com/search';
+const ENTITIES = ['musicArtist', 'album', 'song'] as const;
+const UPSTREAM_TIMEOUT_MS = 8000;
+
+/**
+ * Searches iTunes for a term with three parallel entity-scoped calls
+ * (musicArtist, album, song), then normalizes and interleaves the merged set.
+ * Must run server-side: iTunes CORS-blocks browsers. Each upstream call is
+ * abandoned after 8s via AbortSignal.timeout.
+ */
+export async function searchItunes(term: string) {
+  const payloads = await Promise.all(
+    ENTITIES.map(async (entity) => {
+      // Build the URL with query parameters for the iTunes Search API
+      const params = new URLSearchParams({ term, entity, limit: '10' });
+
+      // Fetch the results from iTunes with a timeout
+      const res = await fetch(`${ITUNES_URL}?${params}`, {
+        signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+      });
+
+      // If the response is not OK, throw an error with the status code
+      if (!res.ok) throw new Error(`iTunes responded with ${res.status}`);
+
+      // Parse the JSON response and extract the results array, defaulting to an empty array if not present
+      const body = (await res.json()) as { results?: RawItunesItem[] };
+      return body.results ?? [];
+    }),
+  );
+
+  // Normalize the raw iTunes items to our SearchResult type, filtering out any nulls
+  const normalized = payloads
+    .flat()
+    .map(normalizeItem)
+    .filter((result): result is SearchResult => result !== null);
+
+  return interleave(normalized);
 }
