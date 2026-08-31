@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeItem } from './itunes.js';
+import { interleave, normalizeItem } from './itunes.js';
+import type { SearchResult } from '../shared/types.js';
 
 describe('normalizeItem', () => {
   it('normalizes an artist', () => {
@@ -80,5 +81,26 @@ describe('normalizeItem', () => {
     ).toBeNull();
     expect(normalizeItem({ wrapperType: 'artist' })).toBeNull(); // no id/name
     expect(normalizeItem({})).toBeNull();
+  });
+});
+
+const searchResult = (kind: SearchResult['kind'], n: number): SearchResult => ({
+  kind,
+  id: `${kind}-${n}`,
+  title: `${kind} ${n}`,
+});
+
+describe('interleave', () => {
+  it('round-robins artist, album, song', () => {
+    const interleavedResult = interleave([searchResult('song', 1), searchResult('song', 2), searchResult('artist', 1), searchResult('album', 1)]);
+    expect(interleavedResult.map((x) => x.id)).toEqual(['artist-1', 'album-1', 'song-1', 'song-2']);
+  });
+
+  it('handles a single kind and empty input', () => {
+    expect(interleave([searchResult('album', 1), searchResult('album', 2)]).map((x) => x.id)).toEqual([
+      'album-1',
+      'album-2',
+    ]);
+    expect(interleave([])).toEqual([]);
   });
 });

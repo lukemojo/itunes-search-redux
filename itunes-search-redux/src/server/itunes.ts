@@ -1,7 +1,7 @@
-import type { SearchResult } from '../shared/types.js';
+import type { ResultKind, SearchResult } from '../shared/types.js';
 
 /**
- * The subset of an iTunes Search API result. 
+ * The subset of an iTunes Search API result.
  * I have left the type deliberately loose and discriminate during normalization.
  */
 export interface RawItunesItem {
@@ -52,4 +52,33 @@ export function normalizeItem(item: RawItunesItem): SearchResult | null {
     default:
       return null;
   }
+}
+
+const KIND_ORDER: ResultKind[] = ['artist', 'album', 'song'];
+
+/**
+ * Round-robins results across kinds (artist, album, song) so one plentiful
+ * kind can't dominate the merged list; relative order within a kind is kept.
+ */
+export function interleave(results: SearchResult[]): SearchResult[] {
+  // Create a bucket for each kind and fill it with the results of that kind
+  const buckets: Record<ResultKind, SearchResult[]> = { artist: [], album: [], song: [] };
+
+  // Fill the buckets with the results
+  for (const result of results) buckets[result.kind].push(result);
+
+  // Take one from each bucket in order until all buckets are empty
+  const out: SearchResult[] = [];
+  let added = true;
+  while (added) {
+    added = false;
+    for (const kind of KIND_ORDER) {
+      const next = buckets[kind].shift();
+      if (next) {
+        out.push(next);
+        added = true;
+      }
+    }
+  }
+  return out;
 }
