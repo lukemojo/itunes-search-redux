@@ -126,3 +126,29 @@ const searchSlice = createSlice({
 
 export const { revealMore } = searchSlice.actions;
 export default searchSlice.reducer;
+
+/** The root-state shape this slice's selectors need (the slice mounts under 'search'). */
+interface WithSearch {
+  search: SearchState;
+}
+
+export const selectStatus = (state: WithSearch) => state.search.status;
+export const selectTerm = (state: WithSearch) => state.search.term;
+export const selectError = (state: WithSearch) => state.search.error;
+
+/** The revealed window over the loaded results. */
+export const selectVisibleResults = (state: WithSearch) =>
+  state.search.results.slice(0, state.search.visibleCount);
+
+/** True while scrolling can show more — unrevealed loaded items, or more upstream. */
+export const selectHasMore = (state: WithSearch) =>
+  state.search.visibleCount < state.search.results.length || state.search.hasMore;
+
+/**
+ * True when under a page of loaded headroom remains, the server reports more,
+ * and no load is in flight — the prefetch trigger.
+ */
+export const selectShouldLoadMore = (state: WithSearch) =>
+  state.search.status === 'succeeded' &&
+  state.search.hasMore &&
+  state.search.results.length - state.search.visibleCount <= PAGE_SIZE;

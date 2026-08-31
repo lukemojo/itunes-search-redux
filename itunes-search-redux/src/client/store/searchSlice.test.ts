@@ -5,6 +5,9 @@ import reducer, {
   loadMore,
   revealMore,
   searchItunes,
+  selectHasMore,
+  selectShouldLoadMore,
+  selectVisibleResults,
   type SearchState,
 } from './searchSlice';
 
@@ -99,5 +102,34 @@ describe('searchSlice', () => {
     // A dead cursor (e.g. server restarted) must not retry-loop
     expect(state.hasMore).toBe(false);
     expect(state.next).toBeUndefined();
+  });
+});
+
+describe('selectors', () => {
+  // Selectors take root state: the slice lives under the 'search' key
+  const wrap = (search: SearchState) => ({ search });
+
+  it('selectVisibleResults returns the first visibleCount results', () => {
+    const visible = selectVisibleResults(wrap(succeeded(25)));
+    expect(visible).toHaveLength(PAGE_SIZE);
+    expect(visible[0]?.id).toBe('song-0');
+  });
+
+  it('selectHasMore is true while unrevealed items remain locally or upstream', () => {
+    expect(selectHasMore(wrap(succeeded(25)))).toBe(true); // unrevealed loaded items
+    expect(selectHasMore(wrap({ ...succeeded(25), visibleCount: 25 }))).toBe(false); // fully revealed, upstream done
+    expect(selectHasMore(wrap({ ...succeeded(25, true), visibleCount: 25 }))).toBe(true); // upstream has more
+    expect(selectHasMore(wrap(succeeded(4)))).toBe(false);
+  });
+
+  it('selectShouldLoadMore prefetches when the reveal window nears the end of loaded data', () => {
+    expect(selectShouldLoadMore(wrap({ ...succeeded(25, true), visibleCount: 20 }))).toBe(true); // 5 unrevealed left
+    expect(selectShouldLoadMore(wrap({ ...succeeded(25, true), visibleCount: 10 }))).toBe(false); // 15 left — no need yet
+    expect(selectShouldLoadMore(wrap({ ...succeeded(25, false), visibleCount: 20 }))).toBe(false); // upstream exhausted
+    expect(
+      selectShouldLoadMore(
+        wrap({ ...succeeded(25, true), visibleCount: 20, status: 'loadingMore' }),
+      ),
+    ).toBe(false); // already loading
   });
 });
