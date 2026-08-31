@@ -18,7 +18,7 @@ export function useInfiniteReveal(onReveal: () => void, enabled: boolean) {
     // Create an IntersectionObserver to observe the sentinel element and call onReveal when it intersects with the viewport
     const observer = new IntersectionObserver((entries) => {
       if (entries.some((entry) => entry.isIntersecting)) onReveal();
-    }, { rootMargin: '200px 0px ' });
+    }, { rootMargin: '200px 0px' });
 
     // Start observing the sentinel element
     observer.observe(el);
