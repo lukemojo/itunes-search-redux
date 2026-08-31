@@ -164,7 +164,13 @@ added, `loadingMore` status added, `results` is append-only):
 
 - `searchItunes = createAsyncThunk(...)` calls `/api/search?term` via the
   redux-thunk middleware. `pending` resets results, cursor and visibleCount=10;
-  `fulfilled` stores results, `hasMore` and `next`; `rejected` errors.
+  `fulfilled` stores results, `hasMore` and `next`; `rejected` errors. Both
+  settle-handlers drop stale responses whose `meta.arg` no longer matches the
+  current term (debounced typing overlaps requests; last-pending wins).
+- Search-as-you-type (added 2026-08-31): the form debounces input — a search
+  fires 400ms after typing pauses (min 2 chars); submit/Enter searches
+  immediately with no minimum. A last-searched ref stops the armed timer from
+  duplicating a submit and identical terms from refiring.
 - `loadMore = createAsyncThunk(...)` refetches echoing the stored `next`
   cursor; `fulfilled` merges append-only by id (never replaces — upstream
   ordering shifts between limits) and stores the new `hasMore`/`next`. A

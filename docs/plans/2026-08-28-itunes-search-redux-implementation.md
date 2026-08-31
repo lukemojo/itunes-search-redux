@@ -926,7 +926,7 @@ Suggested message: `feat(server): bootstrap entry point`
 
 ### Task 8: Redux slice — reducers + thunks
 
-> **Design note (2026-08-31):** revised for the paging revision — two thunks (`searchItunes` fresh, `loadMore` echoing the server's signed `next` cursor, with append-only merge by id), `next`/`hasMore`/`loadingMore` in state. The client never sees a limit; a failed loadMore keeps shown results and stops paging (no retry loop).
+> **Design note (2026-08-31):** revised for the paging revision — two thunks (`searchItunes` fresh, `loadMore` echoing the server's signed `next` cursor, with append-only merge by id), `next`/`hasMore`/`loadingMore` in state. The client never sees a limit; a failed loadMore keeps shown results and stops paging (no retry loop). Later revised again for search-as-you-type: both `searchItunes` settle-handlers ignore actions whose `meta.arg` no longer matches `state.term` (stale responses from overlapping debounced requests; two tests cover fulfilled + rejected).
 
 **Files:**
 - Create: `src/client/store/searchSlice.ts`
@@ -1116,12 +1116,16 @@ const searchSlice = createSlice({
         state.error = undefined;
       })
       .addCase(searchItunes.fulfilled, (state, action) => {
+        // Debounced typing overlaps requests: drop any response for a term
+        // that is no longer the one being searched (last-pending wins).
+        if (action.meta.arg !== state.term) return;
         state.status = 'succeeded';
         state.results = action.payload.results;
         state.hasMore = action.payload.hasMore;
         state.next = action.payload.next;
       })
       .addCase(searchItunes.rejected, (state, action) => {
+        if (action.meta.arg !== state.term) return; // stale failure — ignore
         state.status = 'failed';
         state.error = action.error.message ?? 'Search failed';
       })
@@ -1209,8 +1213,12 @@ interface WithSearch {
 export const selectStatus = (state: WithSearch) => state.search.status;
 export const selectTerm = (state: WithSearch) => state.search.term;
 export const selectError = (state: WithSearch) => state.search.error;
-export const selectVisibleResults = (state: WithSearch) =>
-  state.search.results.slice(0, state.search.visibleCount);
+// Memoized (createSelector): slice() returns a fresh array, and useSelector
+// treats a new reference as a change — react-redux warns and re-renders.
+export const selectVisibleResults = createSelector(
+  [(state: WithSearch) => state.search.results, (state: WithSearch) => state.search.visibleCount],
+  (results, visibleCount) => results.slice(0, visibleCount),
+);
 
 /** True while scrolling can show more — unrevealed loaded items, or more upstream. */
 export const selectHasMore = (state: WithSearch) =>
@@ -1563,19 +1571,40 @@ export function SearchResults() {
 
 **Step 5: Implement `src/client/components/SearchForm.tsx`**
 
+> **Revised (2026-08-31): debounced search-as-you-type.** A search fires DEBOUNCE_MS (400) after typing pauses, minimum 2 chars; submit/Enter is immediate with no minimum. The `lastSearched` ref is re-checked when the timer *fires* (not just when armed) so a submit can't be duplicated by the still-armed timer. Pairs with the slice's stale-response guard (`meta.arg !== state.term` → ignore) since overlapping requests are now routine. Tests use `fireEvent` + fake timers — userEvent hangs under vitest fake timers, and an aborted async test skips `finally`, leaking fake timers into later tests. `type FormEvent` is deprecated in React 19 types ("doesn't actually exist") — use `SubmitEvent`.
+
 ```tsx
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type SubmitEvent } from 'react';
 import { useAppDispatch } from '../store';
 import { searchItunes } from '../store/searchSlice';
+
+export const DEBOUNCE_MS = 400;
+export const MIN_TERM_LENGTH = 2;
 
 export function SearchForm() {
   const dispatch = useAppDispatch();
   const [term, setTerm] = useState('');
+  const lastSearched = useRef('');
 
-  const onSubmit = (event: FormEvent) => {
+  useEffect(() => {
+    const trimmed = term.trim();
+    if (trimmed.length < MIN_TERM_LENGTH) return;
+
+    const timer = setTimeout(() => {
+      // Re-checked at fire time: a submit may have searched this term already
+      if (trimmed === lastSearched.current) return;
+      lastSearched.current = trimmed;
+      dispatch(searchItunes(trimmed));
+    }, DEBOUNCE_MS);
+    return () => clearTimeout(timer); // retyping (or unmount) resets the pause
+  }, [term, dispatch]);
+
+  const onSubmit = (event: SubmitEvent) => {
     event.preventDefault();
     const trimmed = term.trim();
-    if (trimmed) dispatch(searchItunes(trimmed));
+    if (!trimmed || trimmed === lastSearched.current) return;
+    lastSearched.current = trimmed;
+    dispatch(searchItunes(trimmed));
   };
 
   return (
