@@ -1,4 +1,4 @@
-import type { ResultKind, SearchResponse, SearchResult } from '../shared/types.js';
+import type { SearchResponse, SearchResult } from '../shared/types.js';
 
 /**
  * The subset of an iTunes Search API result.
@@ -65,7 +65,7 @@ export const MAX_LIMIT = 200;
  * Searches iTunes for a term with three parallel entity-scoped calls
  * (musicArtist, album, song), then normalizes the set.
  * `limit` is per entity; `hasMore` means refetching with a larger limit may
- * yield more. 
+ * yield more.
  * Refetch acts as pagination as there is no valid pagination mechanism.
  * Must run server-side: iTunes CORS-blocks browsers. Each upstream call is
  * abandoned after 8s via AbortSignal.timeout.

@@ -1,7 +1,6 @@
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { mswServer } from '../mocks/node.js';
-import type { SearchResult } from '../shared/types.js';
 import { normalizeItem, searchItunes } from './itunes.js';
 
 describe('normalizeItem', () => {
