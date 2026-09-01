@@ -32,8 +32,8 @@ Browser ── /api/search?term=…[&cursor=…] ──► Express BFF ──►
 **Why backend for frontend** As detailed in the brief, the API will not work with CORS enabled.
 The decision was to use Express and go through our own origin.
 The server also normalizes the data into a consistent data set.
-loosely-typed iTunes payloads are normalised into one discriminated union (`kind: 'artist' |
-'album' | 'song'), ensuring the 'track' type is only a song and 'typing it as such.
+Loosely-typed iTunes payloads are normalised into one discriminated union (`kind: 'artist' |
+'album' | 'song'`), ensuring the 'track' type is only a song and typing it as such.
 The client stays dumb. In production Express also serves the built
 client (static + SPA fallback).
 
@@ -55,7 +55,7 @@ prefetching the next batch before the reveal window runs dry. Two consequences:
   (keeps what's shown, stops paging, no retry loop).
 
 - **Append-only merge by id.** iTunes' ordering is not consistent across limits, to mitigate this,
-  new items are appended only if they have an unseen id, prevent dupes while scrolling.
+  new items are appended only if they have an unseen id, ing dupes while scrolling.
 
 **Search UX:** Search is automatic as you type, debounced by 400ms with a 2-character minimum;
 Enter searches immediately and also facilitates single letter searches. There is a guard on stale
@@ -79,7 +79,7 @@ item reveal and pre-fetching.
 
 ## Testing
 
-Three layers, 47 tests, colocated `*.test.ts(x)`:
+Three layers, 51 tests, colocated `*.test.ts(x)`:
 
 - **Pure logic** — payload normalization; cursor sign/verify round-trips and
   tamper rejection; slice reducers and selectors (reset-on-search, reveal
@@ -118,7 +118,8 @@ The following was done to facilitate.
 ## Conscious omissions
 
 - **Rate limiting** — a single low-traffic origin behind Render; the signed
-  cursor already blocks limit manipulation. It also won't be searchable when deployed.
+  cursor already blocks limit manipulation.
+- **Not indexable by google**
 - **Response caching** — iTunes responses are already CDN-cached upstream and
   fast; results should feel live.
 - **Structured logging / monitoring**
