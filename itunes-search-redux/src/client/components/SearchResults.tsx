@@ -1,4 +1,5 @@
 import { useCallback, useEffect } from 'react';
+import styled from 'styled-components';
 import { useInfiniteReveal } from '../hooks/useInfiniteReveal';
 import { useAppDispatch, useAppSelector } from '../store';
 import {
@@ -13,6 +14,23 @@ import {
 } from '../store/searchSlice';
 import { ResultCard } from './ResultCard';
 
+const ResultList = styled.ul`
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+`;
+
+const StatusMessage = styled.p`
+  text-align: center;
+  color: #6e6e73;
+`;
+
+const ErrorMessage = styled(StatusMessage)`
+  color: #b91c1c;
+`;
+
 /** The results area: status/error notices, the revealed list, and the scroll sentinel. */
 export function SearchResults() {
   const dispatch = useAppDispatch();
@@ -23,8 +41,8 @@ export function SearchResults() {
   const hasMore = useAppSelector(selectHasMore);
   const shouldLoadMore = useAppSelector(selectShouldLoadMore);
 
-  // Prefetch is state-driven, not scroll-driven: whenever the reveal window
-  // nears the end of loaded data, extend it.
+  // Fetching on scroll is triggered by the sentinel when the observer sees it enter the viewport
+  // The sentinel is only rendered while more content exists
   useEffect(() => {
     if (shouldLoadMore) dispatch(loadMore());
   }, [shouldLoadMore, dispatch]);
@@ -35,17 +53,18 @@ export function SearchResults() {
   const sentinelRef = useInfiniteReveal(reveal, hasMore);
 
   if (status === 'idle') return null;
-  if (status === 'loading') return <p role="status">Searching…</p>;
-  if (status === 'failed') return <p role="alert">{error}</p>;
-  if (visible.length === 0) return <p role="status">No results found for “{term}”</p>;
+  if (status === 'loading') return <StatusMessage role="status">Searching…</StatusMessage>;
+  if (status === 'failed') return <ErrorMessage role="alert">{error}</ErrorMessage>;
+  if (visible.length === 0)
+    return <StatusMessage role="status">No results found for “{term}”</StatusMessage>;
 
   return (
     <>
-      <ul aria-label="Search results">
+      <ResultList aria-label="Search results">
         {visible.map((result) => (
           <ResultCard key={result.id} result={result} />
         ))}
-      </ul>
+      </ResultList>
       {hasMore && <div ref={sentinelRef} aria-hidden="true" />}
     </>
   );

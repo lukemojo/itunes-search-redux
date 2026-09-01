@@ -8,6 +8,7 @@ import { DEBOUNCE_MS } from './components/SearchForm';
 import { makeStore } from './store';
 import { MockIntersectionObserver } from './test/mockIntersectionObserver';
 import type { SearchResult } from '../shared/types';
+import ThemeProvider from './components/ThemeProvider';
 
 /** n results cycling through the three kinds so badges are always present. */
 const makeResults = (n: number): SearchResult[] =>
@@ -45,15 +46,16 @@ const singleBatch = (results: SearchResult[]) => () => ({ results, hasMore: fals
 const renderApp = () =>
   render(
     <Provider store={makeStore()}>
-      <App />
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
     </Provider>,
   );
 
-/** Types a term into the search box and clicks the submit button. */
+/** Types a term into the search box. */
 const search = async (term: string) => {
   const user = userEvent.setup();
   await user.type(screen.getByRole('searchbox'), term);
-  await user.click(screen.getByRole('button', { name: /search/i }));
   return user;
 };
 
@@ -174,7 +176,7 @@ describe('App', () => {
     try {
       renderApp();
       fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'oasis' } });
-      fireEvent.click(screen.getByRole('button', { name: /search/i }));
+      act(() => vi.advanceTimersByTime(DEBOUNCE_MS * 2));
       expect(fetchMock).toHaveBeenCalledTimes(1);
 
       // The armed debounce timer must not fire a second identical search
