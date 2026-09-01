@@ -80,6 +80,9 @@ const searchSlice = createSlice({
     revealMore(state) {
       state.visibleCount = Math.min(state.visibleCount + PAGE_SIZE, state.results.length);
     },
+    clearSearch(state) {
+      return initialState;
+    }
   },
   extraReducers: (builder) => {
     builder
