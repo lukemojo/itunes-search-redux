@@ -4,6 +4,8 @@
 
 **Live:** <https://itunes-search-redux.onrender.com>
 
+**Note** On the free tier render can take a little time to spin up from cold when visiting the app.
+
 An iTunes music search — type a term, get matching artists, albums and songs,
 revealed 10 at a time as you scroll
 
