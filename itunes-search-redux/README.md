@@ -126,4 +126,4 @@ The following was done to facilitate.
   in-flight cursors; the client degrades gracefully, so surviving restarts buys
   little here.
 - **Full Styling** A theme was implemented but a stopping point was reached for submission
-  before full styling. The app looks empty when nothing has been searched. 
+  before full styling. The app looks empty when nothing has been searched.

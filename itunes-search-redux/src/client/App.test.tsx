@@ -113,6 +113,35 @@ describe('App', () => {
     expect(screen.getAllByRole('listitem')).toHaveLength(20);
   });
 
+  it('announces "more than" the visible count while more results exist', async () => {
+    stubFetch(singleBatch(makeResults(25)));
+    renderApp();
+    await search('radiohead');
+    await screen.findByRole('list', { name: /search results/i });
+
+    // 10 of 25 revealed — unrevealed items still count as "more"
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Showing 10 of more than 10 results for “radiohead”',
+    );
+  });
+
+  it('announces the exact count once everything is revealed and upstream is exhausted', async () => {
+    stubFetch(singleBatch(makeResults(25)));
+    renderApp();
+    await search('radiohead');
+    await screen.findByRole('list', { name: /search results/i });
+
+    // Reveal the remaining 15 via the Load more button
+    const button = screen.getByRole('button', { name: /load more/i });
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    expect(screen.getAllByRole('listitem')).toHaveLength(25);
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Showing 25 of 25 results for “radiohead”',
+    );
+  });
+
   it('notifies the user when there are no results', async () => {
     stubFetch(singleBatch([]));
     renderApp();
