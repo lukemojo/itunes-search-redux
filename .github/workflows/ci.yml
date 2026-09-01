@@ -13,7 +13,7 @@ jobs:
         working-directory: itunes-search-redux
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           # actions ignore working-directory; point at the app's packageManager pin
           package_json_file: itunes-search-redux/package.json
