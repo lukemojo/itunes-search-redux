@@ -127,15 +127,13 @@ const LogoIcon = (
       />
     </g>
   </svg>
-)
+);
 
 export default function App() {
   return (
     <Layout>
       <Header>
-        <LogoWrapper>
-          {LogoIcon}
-        </LogoWrapper>
+        <LogoWrapper>{LogoIcon}</LogoWrapper>
         <Title>iTunes Search</Title>
       </Header>
 

@@ -76,10 +76,10 @@ export function SearchResults() {
   const noResultsString = `No results found for “${term}”`;
 
   const getStatusText = () => {
-    if (status === 'loading') return "Searching…";
+    if (status === 'loading') return 'Searching…';
     if (visible.length === 0) return noResultsString;
     if (visible.length > 0) return successString;
-  }
+  };
 
   if (status === 'idle') return null;
   if (status === 'failed') return <ErrorMessage role="alert">{error}</ErrorMessage>;
@@ -101,7 +101,6 @@ export function SearchResults() {
           <LoadMoreButton onClick={() => dispatch(revealMore())}>Load more</LoadMoreButton>
         </>
       )}
-
     </>
   );
 }

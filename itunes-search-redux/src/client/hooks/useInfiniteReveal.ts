@@ -17,7 +17,7 @@ export function useInfiniteReveal(onReveal: () => void, enabled: boolean) {
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) onReveal();
       },
-      // The rootMargin is required to ensure intersection is triggered 
+      // The rootMargin is required to ensure intersection is triggered
       // before the sentinel is actually visible, allowing for prefetching of data.
       { rootMargin: '200px 0px' },
     );
