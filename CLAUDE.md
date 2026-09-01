@@ -1,6 +1,6 @@
 # Repo guide
 
-One product, two implementations of an iTunes music search: `itunes-search-redux/` (primary — React + TS + Redux Toolkit + Express BFF) and `itunes-search-modernjs/` (Modern.js port; gitignored until its phase starts). Design docs and implementation plans live in `docs/plans/` — read the current plan before coding.
+One product, two implementations of an iTunes music search: `itunes-search-redux/` (primary — React + TS + Redux Toolkit + Express BFF) and `itunes-search-modernjs/` (Modern.js port; gitignored until its phase starts). The reviewer-facing decision log is `docs/DECISIONS.md`; the full design doc and build plans were removed from the tree and live in git history (`git log --diff-filter=D -- docs/plans/` finds them) — restore the design doc from history before starting the Modern.js phase.
 
 ## Hard rules
 
