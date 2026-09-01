@@ -2,7 +2,7 @@ import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { mswServer } from '../mocks/node.js';
 import type { SearchResult } from '../shared/types.js';
-import { interleave, normalizeItem, searchItunes } from './itunes.js';
+import { normalizeItem, searchItunes } from './itunes.js';
 
 describe('normalizeItem', () => {
   it('normalizes an artist', () => {
@@ -86,33 +86,8 @@ describe('normalizeItem', () => {
   });
 });
 
-const searchResult = (kind: SearchResult['kind'], n: number): SearchResult => ({
-  kind,
-  id: `${kind}-${n}`,
-  title: `${kind} ${n}`,
-});
-
-describe('interleave', () => {
-  it('round-robins artist, album, song', () => {
-    const interleavedResult = interleave([
-      searchResult('song', 1),
-      searchResult('song', 2),
-      searchResult('artist', 1),
-      searchResult('album', 1),
-    ]);
-    expect(interleavedResult.map((x) => x.id)).toEqual(['artist-1', 'album-1', 'song-1', 'song-2']);
-  });
-
-  it('handles a single kind and empty input', () => {
-    expect(
-      interleave([searchResult('album', 1), searchResult('album', 2)]).map((x) => x.id),
-    ).toEqual(['album-1', 'album-2']);
-    expect(interleave([])).toEqual([]);
-  });
-});
-
 describe('searchItunes', () => {
-  it('fans out to three entities and returns a merged, interleaved set', async () => {
+  it('fans out to three entities and returns a merged set', async () => {
     // Capture the requested URLs so we can assert on them later
     const requestedUrls: URL[] = [];
 
@@ -125,7 +100,7 @@ describe('searchItunes', () => {
     mswServer.events.on('request:start', listener);
 
     // Call the searchItunes function with a test term
-    const { results, hasMore } = await searchItunes('radiohead');
+    const { hasMore } = await searchItunes('radiohead');
 
     // Assert that three requests were made, one for each entity type
     expect(requestedUrls).toHaveLength(3);
@@ -140,9 +115,6 @@ describe('searchItunes', () => {
     // Assert that the term and limit parameters are correct for all requests
     expect(requestedUrls.every((u) => u.searchParams.get('term') === 'radiohead')).toBe(true);
     expect(requestedUrls.every((u) => u.searchParams.get('limit') === '20')).toBe(true);
-
-    // Assert that the results are interleaved correctly based on the mocked data
-    expect(results.map((x) => x.kind)).toEqual(['artist', 'album', 'song']);
 
     // No entity filled its 20-item page, so there is nothing more upstream
     expect(hasMore).toBe(false);

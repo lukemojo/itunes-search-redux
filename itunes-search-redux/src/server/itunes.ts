@@ -54,35 +54,6 @@ export function normalizeItem(item: RawItunesItem): SearchResult | null {
   }
 }
 
-const KIND_ORDER: ResultKind[] = ['artist', 'album', 'song'];
-
-/**
- * Round-robins results across kinds (artist, album, song) so one plentiful
- * kind can't dominate the merged list; relative order within a kind is kept.
- */
-export function interleave(results: SearchResult[]) {
-  // Create a bucket for each kind and fill it with the results of that kind
-  const buckets: Record<ResultKind, SearchResult[]> = { artist: [], album: [], song: [] };
-
-  // Fill the buckets with the results
-  for (const result of results) buckets[result.kind].push(result);
-
-  // Take one from each bucket in order until all buckets are empty
-  const out: SearchResult[] = [];
-  let added = true;
-  while (added) {
-    added = false;
-    for (const kind of KIND_ORDER) {
-      const next = buckets[kind].shift();
-      if (next) {
-        out.push(next);
-        added = true;
-      }
-    }
-  }
-  return out;
-}
-
 const ITUNES_URL = 'https://itunes.apple.com/search';
 const ENTITIES = ['musicArtist', 'album', 'song'] as const;
 const UPSTREAM_TIMEOUT_MS = 8000;
@@ -92,9 +63,10 @@ export const MAX_LIMIT = 200;
 
 /**
  * Searches iTunes for a term with three parallel entity-scoped calls
- * (musicArtist, album, song), then normalizes and interleaves the merged set.
+ * (musicArtist, album, song), then normalizes the set.
  * `limit` is per entity; `hasMore` means refetching with a larger limit may
- * yield more. Refetch acts as pagination as there is no valid pagination mechanism.
+ * yield more. 
+ * Refetch acts as pagination as there is no valid pagination mechanism.
  * Must run server-side: iTunes CORS-blocks browsers. Each upstream call is
  * abandoned after 8s via AbortSignal.timeout.
  */
@@ -127,8 +99,8 @@ export async function searchItunes(term: string, limit = 20) {
     .map(normalizeItem)
     .filter((result): result is SearchResult => result !== null);
 
-  // Interleave the normalized results to ensure a balanced representation of artists, albums, and songs
-  const data: SearchResponse = { results: interleave(normalized), hasMore };
+  // Return the normalized results in the same order they were received, along with the hasMore flag
+  const data: SearchResponse = { results: normalized, hasMore };
 
   return data;
 }
