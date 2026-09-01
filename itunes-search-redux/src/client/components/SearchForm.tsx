@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type SubmitEvent } from 'react';
 import styled from 'styled-components';
-import { useAppDispatch } from '../store';
-import { searchItunes } from '../store/searchSlice';
+import { useAppDispatch, useAppSelector } from '../store';
+import { searchItunes, selectStatus } from '../store/searchSlice';
 
 const Form = styled.form`
   display: flex;
@@ -53,7 +53,23 @@ export function SearchForm() {
   const [term, setTerm] = useState('');
   // Ref to track the last searched term to prevent duplicate searches
   const lastSearched = useRef('');
+  const status = useAppSelector(selectStatus);
 
+  // Forget the last searched term if the search failed, so a retry can be attempted
+  useEffect(() => {
+    if (status === 'failed') lastSearched.current = '';
+  }, [status]);
+
+  // Clear search results when the term is cleared
+  useEffect(() => {
+    const trimmed = term.trim();
+
+    if (trimmed === '') {
+      dispatch({ type: 'search/clearSearch' });
+    }
+  }, [term, dispatch]);
+
+  // Handle debounced search dispatch when typing pauses
   useEffect(() => {
     // Trim the term and check if it meets the minimum length requirement for auto-search
     const trimmed = term.trim();
