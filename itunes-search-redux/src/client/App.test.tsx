@@ -205,4 +205,51 @@ describe('App', () => {
       'iTunes search is currently unavailable',
     );
   });
+
+  it('a failed search can be retried with Enter for the same term', async () => {
+    // First call fails, subsequent calls succeed
+    type FetchResponse = { ok: boolean; status: number; json: () => Promise<unknown> };
+    const fetchMock = vi
+      .fn(async (): Promise<FetchResponse> => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ results: makeResults(5), hasMore: false }),
+      }))
+      .mockImplementationOnce(async () => ({
+        ok: false,
+        status: 502,
+        json: async () => ({ error: 'iTunes search is currently unavailable' }),
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+    renderApp();
+    await search('radiohead');
+    await screen.findByRole('alert');
+
+    // Same term, but the failure must not leave the user stuck on the error
+    fireEvent.submit(screen.getByRole('search'));
+    expect(await screen.findByRole('list', { name: /search results/i })).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('resets to initial state on input clear', async () => {
+    const fetchMock = stubFetch(singleBatch(makeResults(5)));
+    vi.useFakeTimers();
+    try {
+      // Render the app and get the search input element
+      renderApp();
+      const input = screen.getByRole('searchbox');
+
+      fireEvent.change(input, { target: { value: 'radiohead' } });
+      act(() => vi.advanceTimersByTime(DEBOUNCE_MS + 100));
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(String(fetchMock.mock.calls[0]?.[0])).toContain('term=radiohead');
+
+      fireEvent.change(input, { target: { value: '' } });
+      act(() => vi.advanceTimersByTime(DEBOUNCE_MS + 100));
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(screen.queryByRole('list', { name: /search results/i })).not.toBeInTheDocument();
+  });
 });
