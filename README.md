@@ -1,22 +1,18 @@
-# iTunes Search — one product, two implementations
+# iTunes Search
 
 [![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
 
 **Live:** <https://itunes-search-redux.onrender.com>
 
 An iTunes music search — type a term, get matching artists, albums and songs,
-revealed 10 at a time as you scroll — implemented twice to show the same
-architecture expressed two ways:
+revealed 10 at a time as you scroll
 
 - **[`itunes-search-redux/`](itunes-search-redux/)** — the primary submission.
   React + TypeScript + Redux Toolkit (thunks) on the client, an Express BFF
   serving both the API and the static build. Hand-rolled where it teaches
   something: signed paging cursors, append-only merge, MSW-tested fan-out.
-- **`itunes-search-modernjs/`** — the same product re-implemented in Modern.js,
-  showing how the architecture maps onto a full-stack framework: a BFF function
-  replaces the Express server, route loaders replace the fetch-state plumbing.
-  *Status: in progress — scaffolded but not yet part of the repo (gitignored
-  until its build phase starts).*
+- ~**`itunes-search-modernjs/`**~ — The intention is to get this up and running in ModernJs
+  alongside Redux as a comparison but ran out of time for submission which is why you see the nested folder.
 
 ## Requirements
 
@@ -28,7 +24,7 @@ architecture expressed two ways:
 - Semantic, well-structured markup; unit testing throughout.
 - Self-imposed: **built for deployment** — live on a public URL with CI green on
   the repo. A running product demonstrates more than a zip of source.
-- Self-imposed: **production-ready as a lasting portfolio piece** — hardened
+- Self-imposed: **production-ready as a lasting project** — hardened
   server, dependencies kept current automatically (Dependabot), safe to leave up.
 
 ## Where to look
