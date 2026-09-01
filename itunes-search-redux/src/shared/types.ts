@@ -1,6 +1,6 @@
-/** 
- * The music result types we consume. 
-*/
+/**
+ * The music result types we consume.
+ */
 export type ResultKind = 'artist' | 'album' | 'song';
 
 /**

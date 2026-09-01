@@ -97,7 +97,6 @@ const IconLink = styled.a`
   padding: 0.5rem;
 `;
 
-/** The app shell: logo header, icon side nav, and the search form + results in a scrollable main. */
 export default function App() {
   return (
     <Page>

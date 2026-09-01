@@ -27,15 +27,12 @@ export function createApp(search: Searcher = searchItunes): express.Express {
     }),
   );
 
-  // Enable gzip compression for all responses to improve performance
   app.use(compression());
 
-  // Health check endpoint to verify that the server is running
   app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok' });
   });
 
-  // Mount the search router at the '/api' path, delegating search requests to the provided searcher
   app.use('/api', createSearchRouter(search));
 
   // From dist/server/app.js, ../client is the Vite build (dist/client).

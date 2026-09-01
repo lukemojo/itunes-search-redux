@@ -41,8 +41,8 @@ export function SearchResults() {
   const hasMore = useAppSelector(selectHasMore);
   const shouldLoadMore = useAppSelector(selectShouldLoadMore);
 
-  // Fetching on scroll is triggered by the sentinel when the observer sees it enter the viewport
-  // The sentinel is only rendered while more content exists
+  // Prefetch is state-driven: whenever the reveal window
+  // nears the end of loaded data, extend it
   useEffect(() => {
     if (shouldLoadMore) dispatch(loadMore());
   }, [shouldLoadMore, dispatch]);

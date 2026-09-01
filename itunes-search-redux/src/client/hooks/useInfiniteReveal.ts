@@ -7,26 +7,23 @@ import { useEffect, useRef } from 'react';
  * `enabled` false (or an unmounted sentinel) disconnects the observer.
  */
 export function useInfiniteReveal(onReveal: () => void, enabled: boolean) {
-  // Create a ref to hold the sentinel element that will trigger the onReveal callback when it comes into view
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    // If the hook is not enabled or the sentinel element is not available, do nothing
     const el = sentinelRef.current;
     if (!enabled || !el) return;
 
-    // Create an IntersectionObserver to observe the sentinel element and call onReveal when it intersects with the viewport
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) onReveal();
       },
+      // The rootMargin is required to ensure intersection is triggered 
+      // before the sentinel is actually visible, allowing for prefetching of data.
       { rootMargin: '200px 0px' },
     );
 
-    // Start observing the sentinel element
     observer.observe(el);
 
-    // Cleanup function to disconnect the observer when the component unmounts or when enabled changes
     return () => observer.disconnect();
   }, [enabled, onReveal]);
 

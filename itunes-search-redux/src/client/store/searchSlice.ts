@@ -32,19 +32,14 @@ const initialState: SearchState = {
 
 /** Calls the BFF (Backend For Frontend), echoing the server's cursor when extending a search. */
 async function fetchSearch(term: string, cursor?: string): Promise<SearchResponse> {
-  // Build the query parameters for the search request, including the term and optional cursor
   const params = new URLSearchParams({ term, ...(cursor ? { cursor } : {}) });
-
-  // Fetch the search results from the backend API and handle any errors that may occur
   const res = await fetch(`/api/search?${params}`);
 
-  // If the response is not OK, attempt to parse the error message from the response body and throw an error
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string } | null;
     throw new Error(body?.error ?? `Search failed (${res.status})`);
   }
 
-  // Return the parsed JSON response as a SearchResponse object
   return (await res.json()) as SearchResponse;
 }
 
@@ -80,9 +75,10 @@ const searchSlice = createSlice({
     revealMore(state) {
       state.visibleCount = Math.min(state.visibleCount + PAGE_SIZE, state.results.length);
     },
-    clearSearch(state) {
+    /** Clear results, paging and errors when search is cleared */
+    clearSearch() {
       return initialState;
-    }
+    },
   },
   extraReducers: (builder) => {
     builder

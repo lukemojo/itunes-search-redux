@@ -13,8 +13,6 @@ import ThemeProvider from './components/ThemeProvider';
 /** n results cycling through the three kinds so badges are always present. */
 const makeResults = (n: number): SearchResult[] =>
   Array.from({ length: n }, (_, i) => ({
-    // Cycle through the three kinds (artist, album, song) for each result
-    // Divide the index by 3 and use the remainder to select the kind from the KIND_ORDER array
     kind: (['artist', 'album', 'song'] as const)[i % 3]!,
     id: `id-${i}`,
     title: `Result ${i}`,
@@ -26,17 +24,11 @@ const stubFetch = (
   respond: (cursor: string | null) => { results: SearchResult[]; hasMore: boolean; next?: string },
 ) => {
   const fetchMock = vi.fn(async (url: string) => {
-    // Extract the cursor parameter from the URL's query string
     const cursor = new URL(url, 'http://localhost').searchParams.get('cursor');
-
-    // Call the respond function with the extracted cursor to get the mock response
     return { ok: true, status: 200, json: async () => respond(cursor) };
   });
 
-  // Stub the global fetch function with the mock implementation to intercept network requests
   vi.stubGlobal('fetch', fetchMock);
-
-  // Return the fetchMock so that tests can assert on its calls and behavior
   return fetchMock;
 };
 
@@ -104,12 +96,11 @@ describe('App', () => {
         : { results: makeResults(35), hasMore: false },
     );
 
-    // The first batch is revealed immediately, and the prefetch fires while the sentinel is still in view
     renderApp();
     await search('radiohead');
     await screen.findByRole('list', { name: /search results/i });
 
-    // Wait for the prefetch to complete and assert that the fetchMock was called twice (initial search + prefetch)
+    // Initial search + prefetch
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('cursor=cursor-40');
 
@@ -118,7 +109,7 @@ describe('App', () => {
     const { act } = await import('react');
     act(() => observer.trigger());
 
-    // Assert that the total number of list items is now 20 (10 initial + 10 revealed from the prefetched batch)
+    // 10 initial + 10 revealed from the prefetched batch
     expect(screen.getAllByRole('listitem')).toHaveLength(20);
   });
 
@@ -136,7 +127,6 @@ describe('App', () => {
     const fetchMock = stubFetch(singleBatch(makeResults(5)));
     vi.useFakeTimers();
     try {
-      // Render the app and get the search input element
       renderApp();
       const input = screen.getByRole('searchbox');
 
@@ -235,7 +225,6 @@ describe('App', () => {
     const fetchMock = stubFetch(singleBatch(makeResults(5)));
     vi.useFakeTimers();
     try {
-      // Render the app and get the search input element
       renderApp();
       const input = screen.getByRole('searchbox');
 

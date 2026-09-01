@@ -24,7 +24,6 @@ describe('GET /api/search', () => {
     const search = respond(sample, true);
     const res = await request(createApp(search)).get('/api/search').query({ term: 'radiohead' });
 
-    // Assert that the response status is 200 OK and that the response body contains the expected results, hasMore flag, and a next cursor
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ results: sample, hasMore: true, next: expect.any(String) });
     expect(search).toHaveBeenCalledWith('radiohead', 20);
@@ -34,14 +33,12 @@ describe('GET /api/search', () => {
     const search = respond(sample, true);
     const app = createApp(search);
 
-    // Assert that the first request returns a next cursor and that the search function was called with the correct limit
     const first = await request(app).get('/api/search').query({ term: 'radiohead' });
     const second = await request(app)
       .get('/api/search')
       .query({ term: 'radiohead', cursor: first.body.next });
     expect(search).toHaveBeenLastCalledWith('radiohead', 40);
 
-    // Assert that the next cursor is present in the second response and that the search function was called with the correct limit
     await request(app).get('/api/search').query({ term: 'radiohead', cursor: second.body.next });
     expect(search).toHaveBeenLastCalledWith('radiohead', 60);
   });

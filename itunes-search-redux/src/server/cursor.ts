@@ -26,21 +26,13 @@ export function createCursor(limit: number): string {
  * tampered, malformed, or out of range — the route treats null as a 400.
  */
 export function readCursor(token: string): number | null {
-  // Split the token into payload and signature parts
   const [payload, signature] = token.split('.');
-
-  // If either part is missing, return null to indicate an invalid cursor
   if (!payload || !signature) return null;
 
-  // Verify the signature using a timing-safe comparison to prevent timing attacks
   const expected = Buffer.from(sign(payload), 'base64url');
   const received = Buffer.from(signature, 'base64url');
-
-  // If the lengths differ or the signatures don't match, return null to indicate an invalid cursor
   if (received.length !== expected.length || !timingSafeEqual(received, expected)) return null;
 
-  // Convert the payload to a number and validate it against the allowed range
   const limit = Number(payload);
-
   return Number.isInteger(limit) && limit >= 1 && limit <= MAX_LIMIT ? limit : null;
 }

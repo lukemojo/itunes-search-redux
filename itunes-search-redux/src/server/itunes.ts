@@ -73,18 +73,12 @@ export const MAX_LIMIT = 200;
 export async function searchItunes(term: string, limit = 20) {
   const payloads = await Promise.all(
     ENTITIES.map(async (entity) => {
-      // Build the URL with query parameters for the iTunes Search API
       const params = new URLSearchParams({ term, entity, limit: limit.toString() });
-
-      // Fetch the results from iTunes with a timeout
       const res = await fetch(`${ITUNES_URL}?${params}`, {
         signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
       });
-
-      // If the response is not OK, throw an error with the status code
       if (!res.ok) throw new Error(`iTunes responded with ${res.status}`);
 
-      // Parse the JSON response and extract the results array, defaulting to an empty array if not present
       const body = (await res.json()) as { results?: RawItunesItem[] };
       return body.results ?? [];
     }),
@@ -93,14 +87,11 @@ export async function searchItunes(term: string, limit = 20) {
   // A full raw page from any entity means a larger limit may yield more
   const hasMore = limit < MAX_LIMIT && payloads.some((items) => items.length >= limit);
 
-  // Normalize the raw iTunes items to our SearchResult type, filtering out any nulls
   const normalized = payloads
     .flat()
     .map(normalizeItem)
     .filter((result): result is SearchResult => result !== null);
 
-  // Return the normalized results in the same order they were received, along with the hasMore flag
   const data: SearchResponse = { results: normalized, hasMore };
-
   return data;
 }

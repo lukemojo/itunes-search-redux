@@ -47,11 +47,10 @@ export const MIN_TERM_LENGTH = 2;
  * The search form, search as you type
  */
 export function SearchForm() {
-  // Dispatch function to send actions to the Redux store
   const dispatch = useAppDispatch();
-  // State to hold the current value of the search input
   const [term, setTerm] = useState('');
-  // Ref to track the last searched term to prevent duplicate searches
+  // Last dispatched term — stops the debounce timer duplicating an Enter
+  // search, and identical search terms refiring
   const lastSearched = useRef('');
   const status = useAppSelector(selectStatus);
 
@@ -69,23 +68,15 @@ export function SearchForm() {
     }
   }, [term, dispatch]);
 
-  // Handle debounced search dispatch when typing pauses
+  // Debounced search dispatch
   useEffect(() => {
-    // Trim the term and check if it meets the minimum length requirement for auto-search
     const trimmed = term.trim();
-
-    // If the trimmed term is too short, do not set a debounce timer
     if (trimmed.length < MIN_TERM_LENGTH) return;
 
-    // Set a debounce timer to dispatch the search action after a pause in typing
     const timer = setTimeout(() => {
-      // Re-checked at fire time: a submit may have searched this term already
+      // Re-checked at fire time: Enter may have searched this term already
       if (trimmed === lastSearched.current) return;
-
-      // Update the last searched term and dispatch the search action
       lastSearched.current = trimmed;
-
-      // Dispatch the search action with the trimmed term
       dispatch(searchItunes(trimmed));
     }, DEBOUNCE_MS);
 

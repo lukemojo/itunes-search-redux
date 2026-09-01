@@ -87,38 +87,27 @@ describe('normalizeItem', () => {
 
 describe('searchItunes', () => {
   it('fans out to three entities and returns a merged set', async () => {
-    // Capture the requested URLs so we can assert on them later
+    // MSW's events API records the real outbound URLs so the fan-out is observable
     const requestedUrls: URL[] = [];
-
-    // Listener function to capture the requested URLs
     const listener = ({ request }: { request: Request }) => {
       requestedUrls.push(new URL(request.url));
     };
-
-    // Use the MSW server to capture requests and record their URLs
     mswServer.events.on('request:start', listener);
 
-    // Call the searchItunes function with a test term
     const { hasMore } = await searchItunes('radiohead');
 
-    // Assert that three requests were made, one for each entity type
     expect(requestedUrls).toHaveLength(3);
-
-    // Assert that the requested entity types are as expected and that the term and limit parameters are correct
     expect(requestedUrls.map((u) => u.searchParams.get('entity')).sort()).toEqual([
       'album',
       'musicArtist',
       'song',
     ]);
-
-    // Assert that the term and limit parameters are correct for all requests
     expect(requestedUrls.every((u) => u.searchParams.get('term') === 'radiohead')).toBe(true);
     expect(requestedUrls.every((u) => u.searchParams.get('limit') === '20')).toBe(true);
 
     // No entity filled its 20-item page, so there is nothing more upstream
     expect(hasMore).toBe(false);
 
-    // Remove the listener after the test to avoid side effects
     mswServer.events.removeListener('request:start', listener);
   });
 

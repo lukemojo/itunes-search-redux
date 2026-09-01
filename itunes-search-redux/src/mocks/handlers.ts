@@ -1,10 +1,6 @@
 import { http, HttpResponse } from 'msw';
 
-/**
- * Helper function to create a mock iTunes API payload with a given array of results.
- * @param results - An array of results to include in the payload.
- * @returns An object representing the iTunes API response with the given results.
- */
+/** Wraps results in the iTunes response envelope. */
 const itunesPayload = (results: unknown[]) => ({ resultCount: results.length, results });
 
 /**
