@@ -1,6 +1,6 @@
 # iTunes Search
 
-[![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
+[![CI](https://github.com/lukemojo/itunes-search-redux/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
 
 **Live:** <https://itunes-search-redux.onrender.com>
 
