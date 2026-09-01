@@ -110,3 +110,17 @@ describe('GET /api/health', () => {
     );
   });
 });
+
+describe('search engine opt-out', () => {
+  it('tells crawlers not to index any response', async () => {
+    const res = await request(createApp(respond([]))).get('/api/health');
+    expect(res.headers['x-robots-tag']).toBe('noindex, nofollow');
+  });
+
+  it('serves a deny-all robots.txt', async () => {
+    const res = await request(createApp(respond([]))).get('/robots.txt');
+    expect(res.status).toBe(200);
+    expect(res.type).toBe('text/plain');
+    expect(res.text).toContain('Disallow: /');
+  });
+});

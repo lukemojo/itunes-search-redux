@@ -29,6 +29,17 @@ export function createApp(search: Searcher = searchItunes): express.Express {
 
   app.use(compression());
 
+  // keep it out of search engines for now.
+  // The header covers every response; robots.txt is served
+  // as a route so it works without the client build present.
+  app.use((_req, res, next) => {
+    res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+    next();
+  });
+  app.get('/robots.txt', (_req, res) => {
+    res.type('text/plain').send('User-agent: *\nDisallow: /\n');
+  });
+
   app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok' });
   });
