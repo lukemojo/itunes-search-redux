@@ -120,6 +120,70 @@ describe('searchSlice', () => {
     expect(state.visibleCount).toBe(PAGE_SIZE); // loading more never reveals
   });
 
+  it('ignores a stale loadMore fulfilled that lands after a new search', () => {
+    // A loadMore is in flight when the user searches something new
+    let state = reducer(succeeded(20, true), loadMore.pending('load1'));
+    state = reducer(state, searchItunes.pending('req2', 'oasis'));
+    state = reducer(
+      state,
+      searchItunes.fulfilled(
+        { results: results(5, 100), hasMore: true, next: 'oasis-cursor' },
+        'req2',
+        'oasis',
+      ),
+    );
+
+    // The old term's batch lands last: it must not pollute the list or cursor
+    state = reducer(
+      state,
+      loadMore.fulfilled({ results: results(10, 40), hasMore: false }, 'load1'),
+    );
+    expect(state.results).toHaveLength(5);
+    expect(state.hasMore).toBe(true);
+    expect(state.next).toBe('oasis-cursor');
+  });
+
+  it('ignores a stale loadMore rejection that lands during a new search', () => {
+    let state = reducer(succeeded(20, true), loadMore.pending('load1'));
+    state = reducer(state, searchItunes.pending('req2', 'oasis'));
+    state = reducer(state, loadMore.rejected(new Error('boom'), 'load1'));
+
+    // The new search must keep loading unharmed, with its paging intact
+    expect(state.status).toBe('loading');
+    expect(state.error).toBeUndefined();
+  });
+
+  it('only the in-flight loadMore may settle: an older request is ignored', () => {
+    // Old loadMore still in flight; a new search completes and prefetches its own
+    let state = reducer(succeeded(20, true), loadMore.pending('load1'));
+    state = reducer(state, searchItunes.pending('req2', 'oasis'));
+    state = reducer(
+      state,
+      searchItunes.fulfilled(
+        { results: results(15, 100), hasMore: true, next: 'oasis-40' },
+        'req2',
+        'oasis',
+      ),
+    );
+    state = reducer(state, loadMore.pending('load2'));
+
+    // The OLD term's loadMore settles while the new one is still in flight
+    state = reducer(
+      state,
+      loadMore.fulfilled({ results: results(10, 40), hasMore: false }, 'load1'),
+    );
+    expect(state.results).toHaveLength(15); // untouched
+    expect(state.status).toBe('loadingMore'); // still waiting on the live request
+
+    // The live request settles normally
+    state = reducer(
+      state,
+      loadMore.fulfilled({ results: results(20, 100), hasMore: false }, 'load2'),
+    );
+    expect(state.status).toBe('succeeded');
+    expect(state.results).toHaveLength(20);
+  });
+
   it('loadMore rejected keeps the shown results, stays succeeded, and stops paging', () => {
     const pending = reducer(succeeded(20, true), loadMore.pending('req2'));
     const state = reducer(pending, loadMore.rejected(new Error('boom'), 'req2'));

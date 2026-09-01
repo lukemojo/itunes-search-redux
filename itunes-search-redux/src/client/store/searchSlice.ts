@@ -16,6 +16,8 @@ export interface SearchState {
   next?: string;
   /** Server says a refetch may yield more. */
   hasMore: boolean;
+  /** requestId of the in-flight loadMore */
+  loadMoreRequestId?: string;
   error?: string;
 }
 
@@ -88,6 +90,7 @@ const searchSlice = createSlice({
         state.visibleCount = PAGE_SIZE;
         state.next = undefined;
         state.hasMore = false;
+        state.loadMoreRequestId = undefined; // orphan any in-flight loadMore
         state.error = undefined;
       })
       .addCase(searchItunes.fulfilled, (state, action) => {
@@ -104,10 +107,14 @@ const searchSlice = createSlice({
         state.status = 'failed';
         state.error = action.error.message ?? 'Search failed';
       })
-      .addCase(loadMore.pending, (state) => {
+      .addCase(loadMore.pending, (state, action) => {
         state.status = 'loadingMore';
+        state.loadMoreRequestId = action.meta.requestId;
       })
       .addCase(loadMore.fulfilled, (state, action) => {
+        // Only the in-flight request may settle — a superseded batch is stale.
+        if (action.meta.requestId !== state.loadMoreRequestId) return;
+        state.loadMoreRequestId = undefined;
         state.status = 'succeeded';
         state.hasMore = action.payload.hasMore;
         state.next = action.payload.next;
@@ -118,6 +125,8 @@ const searchSlice = createSlice({
         }
       })
       .addCase(loadMore.rejected, (state, action) => {
+        if (action.meta.requestId !== state.loadMoreRequestId) return; // stale — ignore
+        state.loadMoreRequestId = undefined;
         // Keep what's shown; surface the error without blowing the list away.
         // Drop the cursor so a dead one (e.g. server restart) can't retry-loop.
         state.status = 'succeeded';
@@ -136,8 +145,11 @@ interface WithSearch {
   search: SearchState;
 }
 
+/** The search lifecycle status driving which view SearchResults renders. */
 export const selectStatus = (state: WithSearch) => state.search.status;
+/** The term currently being (or last) searched. */
 export const selectTerm = (state: WithSearch) => state.search.term;
+/** The most recent search or load-more error message, if any. */
 export const selectError = (state: WithSearch) => state.search.error;
 
 /**
