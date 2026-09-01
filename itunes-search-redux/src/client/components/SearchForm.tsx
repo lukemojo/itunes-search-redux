@@ -64,6 +64,7 @@ export function SearchForm() {
     const trimmed = term.trim();
 
     if (trimmed === '') {
+      lastSearched.current = trimmed;
       dispatch({ type: 'search/clearSearch' });
     }
   }, [term, dispatch]);

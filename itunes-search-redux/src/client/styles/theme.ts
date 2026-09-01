@@ -7,6 +7,7 @@ export const theme = {
     paper: '#17171a',
     text: '#ffffff',
     border: '#333333',
+    error: '#ff4d4f',
   },
   fonts: {
     body: "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
@@ -38,7 +39,7 @@ export const theme = {
     },
   },
   sizing: {
-    sidebarWidth: '12rem',
+    sidebarWidth: '6rem',
   },
   spacing: (multiplier: number) => `${multiplier * 0.25}rem`,
 } as const;
