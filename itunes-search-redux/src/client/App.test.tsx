@@ -140,6 +140,9 @@ describe('App', () => {
     expect(screen.getByRole('status')).toHaveTextContent(
       'Showing 25 of 25 results for “radiohead”',
     );
+
+    // Nothing left to reveal or fetch: the button must not linger as a dead control
+    expect(screen.queryByRole('button', { name: /load more/i })).not.toBeInTheDocument();
   });
 
   it('notifies the user when there are no results', async () => {

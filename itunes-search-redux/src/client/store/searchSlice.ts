@@ -136,7 +136,7 @@ const searchSlice = createSlice({
   },
 });
 
-export const { revealMore } = searchSlice.actions;
+export const { revealMore, clearSearch } = searchSlice.actions;
 export default searchSlice.reducer;
 
 /** The root-state shape this slice's selectors need (the slice mounts under 'search'). */

@@ -98,7 +98,9 @@ export function SearchResults() {
             ))}
           </ResultList>
           {hasMore && <div ref={sentinelRef} aria-hidden="true" />}
-          <LoadMoreButton onClick={() => dispatch(revealMore())}>Load more</LoadMoreButton>
+          {hasMore && (
+            <LoadMoreButton onClick={() => dispatch(revealMore())}>Load more</LoadMoreButton>
+          )}
         </>
       )}
     </>

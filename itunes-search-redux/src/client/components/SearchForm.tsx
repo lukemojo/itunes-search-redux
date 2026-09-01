@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type SubmitEvent } from 'react';
 import styled from 'styled-components';
 import { useAppDispatch, useAppSelector } from '../store';
-import { searchItunes, selectStatus } from '../store/searchSlice';
+import { clearSearch, searchItunes, selectStatus } from '../store/searchSlice';
 
 const Form = styled.form`
   display: flex;
@@ -65,7 +65,7 @@ export function SearchForm() {
 
     if (trimmed === '') {
       lastSearched.current = trimmed;
-      dispatch({ type: 'search/clearSearch' });
+      dispatch(clearSearch());
     }
   }, [term, dispatch]);
 
