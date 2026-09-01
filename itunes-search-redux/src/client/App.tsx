@@ -2,7 +2,6 @@ import styled from 'styled-components';
 import { SearchForm } from './components/SearchForm';
 import { SearchResults } from './components/SearchResults';
 
-// Single centered column; generous bottom padding so the last card clears the viewport edge
 const Page = styled.div`
   margin: 0 auto;
 `;
@@ -98,7 +97,7 @@ const IconLink = styled.a`
   padding: 0.5rem;
 `;
 
-/** The whole page: search form in the header, results in main. */
+/** The app shell: logo header, icon side nav, and the search form + results in a scrollable main. */
 export default function App() {
   return (
     <Page>
@@ -106,6 +105,7 @@ export default function App() {
         <Header>
           <LogoWrapper>
             <svg
+              aria-hidden="true"
               fill="none"
               height="48"
               viewBox="0 0 44 48"
@@ -125,8 +125,9 @@ export default function App() {
         </Header>
 
         <Nav>
-          <IconLink href="/">
+          <IconLink href="/" aria-label="Search">
             <svg
+              aria-hidden="true"
               xmlns="http://www.w3.org/2000/svg"
               x="0px"
               y="0px"

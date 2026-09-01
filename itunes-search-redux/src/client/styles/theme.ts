@@ -1,3 +1,4 @@
+/** Design tokens consumed via styled-components */
 export const theme = {
   colors: {
     primary: '#8e34bb',

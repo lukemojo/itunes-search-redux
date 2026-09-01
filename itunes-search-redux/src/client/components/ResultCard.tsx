@@ -73,9 +73,7 @@ export function ResultCard({ result }: { result: SearchResult }) {
         <div>
           <Title>{result.title}</Title>
           {result.subtitle && <Subtitle>{result.subtitle}</Subtitle>}
-          <Badge $kind={result.kind} aria-label={`Type: ${KIND_LABELS[result.kind]}`}>
-            {KIND_LABELS[result.kind]}
-          </Badge>
+          <Badge $kind={result.kind}>{KIND_LABELS[result.kind]}</Badge>
         </div>
       </Card>
     </li>
