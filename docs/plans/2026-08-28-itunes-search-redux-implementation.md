@@ -4,7 +4,7 @@
 
 **Goal:** Build the primary iTunes search app — React + TypeScript + Redux Toolkit client, Express BFF server — to fully done (code, tests, READMEs, CI, live Render deploy), per `docs/plans/2026-08-28-itunes-search-design.md`. The bar is production-ready: this stays up as a portfolio piece Luke can point to, and stays easy to progress (see the design doc's "Production readiness" section).
 
-**Architecture:** Single package at `itunes-search-redux/` with `src/client` (Vite + React + Redux Toolkit), `src/server` (Express BFF that fans out to the iTunes Search API, normalizes, interleaves), and `src/shared` (types). The client fetches merged results in growing batches (per-entity limit 20 → 40 → 60, capped at 200 — iTunes' `offset` is non-functional, verified 2026-08-31) and reveals 10 rows at a time via an IntersectionObserver sentinel, prefetching the next batch as the reveal window nears the end of loaded data; the reducer merges refetches append-only by id because upstream ordering shifts between limits. In prod, Express statically serves the Vite build.
+**Architecture:** Single package at `itunes-search-redux/` with `src/client` (Vite + React + Redux Toolkit), `src/server` (Express BFF that fans out to the iTunes Search API and normalizes; interleaving was dropped 2026-09-01 — results keep entity-group order), and `src/shared` (types). The client fetches merged results in growing batches (per-entity limit 20 → 40 → 60, capped at 200 — iTunes' `offset` is non-functional, verified 2026-08-31) and reveals 10 rows at a time via an IntersectionObserver sentinel, prefetching the next batch as the reveal window nears the end of loaded data; the reducer merges refetches append-only by id because upstream ordering shifts between limits. In prod, Express statically serves the Vite build.
 
 **Tech Stack:** TypeScript (strict), React 19, Redux Toolkit (`createAsyncThunk`), Express 5, Vite, Vitest (projects: node env for server, jsdom for client), @testing-library/react, supertest, styled-components, oxlint (linting), oxfmt (formatting), tsx (dev server runner), Node 22, **pnpm** (package manager — pinned via `packageManager`, matching the Modern.js app). Deployment: Render web service (free plan) via `render.yaml` Blueprint; CI via GitHub Actions.
 
@@ -406,84 +406,13 @@ Suggested message: `feat(server): shared result types and iTunes payload normali
 
 ---
 
-### Task 4: De-dupe and interleave
+### Task 4: De-dupe and interleave — both ultimately dropped
 
-**Files:**
-- Modify: `src/server/itunes.ts`
-- Test: `src/server/itunes.test.ts`
-
-**Step 1: Write the failing tests** (append to `src/server/itunes.test.ts`)
-
-```ts
-import { interleave } from './itunes.js';
-import type { SearchResult } from '../shared/types.js';
-
-const r = (kind: SearchResult['kind'], n: number): SearchResult => ({
-  kind,
-  id: `${kind}-${n}`,
-  title: `${kind} ${n}`,
-});
-
-describe('interleave', () => {
-  it('round-robins artist, album, song', () => {
-    const result = interleave([r('song', 1), r('song', 2), r('artist', 1), r('album', 1)]);
-    expect(result.map((x) => x.id)).toEqual(['artist-1', 'album-1', 'song-1', 'song-2']);
-  });
-
-  it('handles a single kind and empty input', () => {
-    expect(interleave([r('album', 1), r('album', 2)]).map((x) => x.id)).toEqual(['album-1', 'album-2']);
-    expect(interleave([])).toEqual([]);
-  });
-});
-```
-
-(Adjust the existing import line to pull `interleave` alongside `normalizeItem` — one import statement.)
+**Files:** none surviving — `src/server/itunes.ts` ships with neither step.
 
 > **Design note (2026-08-31):** a `dedupe` step was originally planned here, but was dropped after verifying empirically that entity-scoped iTunes searches don't return duplicate ids within a call, and kind-prefixed ids (`artist-`/`album-`/`song-`) make cross-call collisions impossible by construction. Bring it back only if duplicates are ever observed. (The 2026-08-31 paging revision later reintroduced de-duping *client-side*, in the reducer's append-only merge — refetches at grown limits do overlap by design.)
 
-**Step 2: Run to verify failure**
-
-```bash
-pnpm vitest run src/server/itunes.test.ts
-```
-
-Expected: FAIL — `interleave` not exported.
-
-**Step 3: Implement in `src/server/itunes.ts`**
-
-```ts
-import type { ResultKind, SearchResult } from '../shared/types.js';
-
-const KIND_ORDER: ResultKind[] = ['artist', 'album', 'song'];
-
-export function interleave(results: SearchResult[]): SearchResult[] {
-  const buckets: Record<ResultKind, SearchResult[]> = { artist: [], album: [], song: [] };
-  for (const r of results) buckets[r.kind].push(r);
-  const out: SearchResult[] = [];
-  let added = true;
-  while (added) {
-    added = false;
-    for (const kind of KIND_ORDER) {
-      const next = buckets[kind].shift();
-      if (next) {
-        out.push(next);
-        added = true;
-      }
-    }
-  }
-  return out;
-}
-```
-
-**Step 4: Run tests, expect PASS**
-
-```bash
-pnpm vitest run src/server/itunes.test.ts
-```
-
-**Step 5: Lint + format, then CHECKPOINT**
-
-Suggested message: `feat(server): kind-interleave merged results`
+> **Design note (2026-09-01):** `interleave` (round-robin artist/album/song) was implemented here and removed again in the UI pass: the redesigned results layout reads better with entity-group order (artists, then albums, then songs), and after the client's append-only merge the displayed order is client-owned anyway — the server round-robin was logic serving a presentational choice that no longer existed. `searchItunes` now returns results in the order the three entity payloads are flattened. See the design doc's struck interleave bullet.
 
 ---
 
@@ -514,7 +443,7 @@ afterEach(() => mswServer.resetHandlers());
 afterAll(() => mswServer.close());
 
 describe('searchItunes', () => {
-  it('fans out to three entities and returns a merged, interleaved set', async () => {
+  it('fans out to three entities and returns a merged set', async () => {
     const requestedUrls: URL[] = [];
     mswServer.use(
       http.get('https://itunes.apple.com/search', ({ request }) => {
@@ -582,7 +511,7 @@ export async function searchItunes(term: string): Promise<SearchResult[]> {
     .map(normalizeItem)
     .filter((r): r is SearchResult => r !== null);
 
-  return interleave(normalized);
+  return normalized;
 }
 ```
 
@@ -635,7 +564,7 @@ export async function searchItunes(term: string, limit: number): Promise<SearchR
   const hasMore = limit < MAX_LIMIT && payloads.some((items) => items.length >= limit);
 
   const normalized = ...; // as before
-  return { results: interleave(normalized), hasMore };
+  return { results: normalized, hasMore };
 }
 ```
 
@@ -1390,14 +1319,16 @@ const singleBatch = (results: SearchResult[]) => () => ({ results, hasMore: fals
 
 const renderApp = () => render(
   <Provider store={makeStore()}>
-    <App />
+    <ThemeProvider>
+      <App />
+    </ThemeProvider>
   </Provider>,
 );
 
+// Typing alone triggers the search (debounced); there is no Search button
 const search = async (term: string) => {
   const user = userEvent.setup();
   await user.type(screen.getByRole('searchbox'), term);
-  await user.click(screen.getByRole('button', { name: /search/i }));
   return user;
 };
 
@@ -1523,6 +1454,8 @@ export function ResultCard({ result }: { result: SearchResult }) {
 
 **Step 4: Implement `src/client/components/SearchResults.tsx`**
 
+> **Superseded (2026-09-01):** the snippet below is the original implementation; the accessibility pass replaced the per-branch status paragraphs with a persistent `role="status"` region announcing the lifecycle and result count, added a "Load more" button beside the sentinel (both gated on `hasMore`), and put explicit `role="list"` on the `ul`. See *Post-review hardening* at the end of this plan and the design doc's accessibility revision.
+
 ```tsx
 import { useCallback, useEffect } from 'react';
 import { useInfiniteReveal } from '../hooks/useInfiniteReveal';
@@ -1578,7 +1511,9 @@ export function SearchResults() {
 
 **Step 5: Implement `src/client/components/SearchForm.tsx`**
 
-> **Revised (2026-08-31): debounced search-as-you-type.** A search fires DEBOUNCE_MS (400) after typing pauses, minimum 2 chars; submit/Enter is immediate with no minimum. The `lastSearched` ref is re-checked when the timer *fires* (not just when armed) so a submit can't be duplicated by the still-armed timer. Pairs with the slice's stale-response guard (`meta.arg !== state.term` → ignore) since overlapping requests are now routine. Tests use `fireEvent` + fake timers — userEvent hangs under vitest fake timers, and an aborted async test skips `finally`, leaking fake timers into later tests. `type FormEvent` is deprecated in React 19 types ("doesn't actually exist") — use `SubmitEvent`.
+> **Revised (2026-08-31): debounced search-as-you-type.** A search fires DEBOUNCE_MS (400) after typing pauses, minimum 2 chars; Enter is immediate with no minimum. The `lastSearched` ref is re-checked when the timer *fires* (not just when armed) so an Enter search can't be duplicated by the still-armed timer. Pairs with the slice's stale-response guard (`meta.arg !== state.term` → ignore) since overlapping requests are now routine. Tests use `fireEvent` + fake timers — userEvent hangs under vitest fake timers, and an aborted async test skips `finally`, leaking fake timers into later tests. `type FormEvent` is deprecated in React 19 types ("doesn't actually exist") — use `SubmitEvent`.
+
+> **Revised (2026-09-01): the visible Search button was removed in the UI pass** — search-as-you-type makes it redundant. The form keeps `onSubmit` regardless: Enter still submits a button-less form, and without `preventDefault` the native submit reloads the page and wipes state; it is also the only way to search sub-minimum-length terms. The label is visually hidden (clip-rect) but stays in the DOM for screen readers.
 
 ```tsx
 import { useEffect, useRef, useState, type SubmitEvent } from 'react';
@@ -1598,7 +1533,7 @@ export function SearchForm() {
     if (trimmed.length < MIN_TERM_LENGTH) return;
 
     const timer = setTimeout(() => {
-      // Re-checked at fire time: a submit may have searched this term already
+      // Re-checked at fire time: Enter may have searched this term already
       if (trimmed === lastSearched.current) return;
       lastSearched.current = trimmed;
       dispatch(searchItunes(trimmed));
@@ -1606,6 +1541,7 @@ export function SearchForm() {
     return () => clearTimeout(timer); // retyping (or unmount) resets the pause
   }, [term, dispatch]);
 
+  // Enter fallback: search immediately instead of the native submit's reload
   const onSubmit = (event: SubmitEvent) => {
     event.preventDefault();
     const trimmed = term.trim();
@@ -1615,41 +1551,23 @@ export function SearchForm() {
   };
 
   return (
-    <form role="search" onSubmit={onSubmit}>
-      <label htmlFor="search-term">Search artists, albums and songs</label>
-      <input
+    <Form role="search" onSubmit={onSubmit}>
+      <HiddenLabel htmlFor="search-term">Search artists, albums and songs</HiddenLabel>
+      <Input
         id="search-term"
         type="search"
         value={term}
         onChange={(event) => setTerm(event.target.value)}
-        placeholder="e.g. Radiohead"
+        placeholder="What are you looking for?"
       />
-      <button type="submit">Search</button>
-    </form>
+    </Form>
   );
 }
 ```
 
 **Step 6: Implement `src/client/App.tsx`**
 
-```tsx
-import { SearchForm } from './components/SearchForm';
-import { SearchResults } from './components/SearchResults';
-
-export default function App() {
-  return (
-    <>
-      <header>
-        <h1>iTunes Search</h1>
-        <SearchForm />
-      </header>
-      <main>
-        <SearchResults />
-      </main>
-    </>
-  );
-}
-```
+As implemented after the 2026-09-01 UI pass, `App.tsx` is the styled app shell rather than the minimal header/main pair originally planned: a CSS-grid `Layout` (logo header spanning the top, icon side nav hidden under 768px, scrollable `Main` column) with `SearchForm` in a sticky `FormWrapper` above `SearchResults`. All presentation comes from styled-components reading the `ThemeProvider` theme tokens (`styles/theme.ts`, typed via `styles/styled-components.d.ts` module augmentation); `GlobalStyle` renders inside `components/ThemeProvider.tsx`. Results with no artwork use per-kind fallback images in `public/images/blank-*.png`.
 
 **Step 7: Run, expect PASS**
 
@@ -1664,16 +1582,21 @@ import { createRoot } from 'react-dom/client';
 import { Provider } from 'react-redux';
 import App from './App';
 import { makeStore } from './store';
+import ThemeProvider from './components/ThemeProvider';
 
 const container = document.getElementById('root');
 if (!container) throw new Error('Missing #root element');
 
 createRoot(container).render(
   <Provider store={makeStore()}>
-    <App />
+    <ThemeProvider>
+      <App />
+    </ThemeProvider>
   </Provider>,
 );
 ```
+
+(Tests wrap `renderApp` in the same `ThemeProvider` so styled-components can resolve theme tokens.)
 
 **Step 9: Full suite + typecheck + lint + format, then CHECKPOINT**
 
@@ -1726,13 +1649,13 @@ export const GlobalStyle = createGlobalStyle`
 `;
 ```
 
-**Step 2: Restyle components.** Convert presentation to styled-components while **keeping the element types and ARIA attributes identical** (tests must keep passing). Guidelines, not verbatim requirements:
+**Step 2: Restyle components.** Convert presentation to styled-components while **keeping the element types and ARIA attributes identical** (tests must keep passing).
 
-- `App.tsx`: render `<GlobalStyle />` first; centered column layout, max-width ~40rem.
-- `SearchForm`: visually-hidden label (styled, still in the DOM), rounded search input + button on one row.
-- `SearchResults`: `ul` with `list-style: none; padding: 0; display: grid; gap: 0.5rem;`.
-- `ResultCard`: card row — artwork left (60px, rounded), badge as a small pill whose colour varies by `kind` (prop-based), title/subtitle stacked. Use `article { display: flex; gap: 1rem; }`.
-- Status/error paragraphs: centered, muted; error in a red tone.
+> **As implemented (2026-09-01):** Luke replaced the initial minimal restyle with a full UI pass — token theme (`styles/theme.ts`, typed via `styled-components.d.ts` module augmentation) delivered by `components/ThemeProvider.tsx` (which also renders `GlobalStyle`), a grid app shell (logo header, icon side nav hidden under 768px, scrollable main with sticky search), the Search button removed (search-as-you-type; Enter kept as an immediate-search fallback via `onSubmit`), and per-kind artwork fallback images in `public/images/blank-*.png`. Element types and ARIA stayed identical throughout:
+
+- `SearchForm`: visually-hidden label (clip-rect, still in the DOM), rounded search input.
+- `SearchResults`: `ul` as an unstyled grid; status/error paragraphs styled, error in a red tone.
+- `ResultCard`: card row — artwork left (60px, rounded, per-kind fallback image when iTunes has none), badge as a small pill whose colour varies by `kind` (transient `$kind` prop), title/subtitle stacked.
 
 Example badge pattern:
 
@@ -1868,6 +1791,8 @@ Suggested message: `chore: Render blueprint for the Redux app`
 **Files:**
 - Create: `itunes-search-redux/README.md`
 
+> **As implemented (2026-09-01):** a first draft covered the outline below; Luke then rewrote the README in his own voice for submission. The outline remains the content checklist it was written against.
+
 **Step 1: Write the README.** Cover, briefly and concretely:
 
 - What it is: iTunes music search — artists, albums, songs; 10 at a time with infinite reveal. **Live URL** (from Task 15) up top, with a note that the free tier cold-starts after idle (~30s first load).
@@ -1875,7 +1800,7 @@ Suggested message: `chore: Render blueprint for the Redux app`
 - Deployment: Render web service defined in the root `render.yaml` (build `pnpm install --frozen-lockfile && pnpm build`, start `pnpm start`, health check `/api/health`); auto-deploys from the default branch.
 - Production notes: helmet CSP (Apple artwork CDN allowed), compression, 8s upstream timeout on iTunes calls, graceful SIGTERM shutdown, Dependabot + CI keeping dependencies current.
 - **Conscious omissions** (one line of rationale each): rate limiting (single low-traffic origin behind Render; add express-rate-limit if it ever matters), response caching (iTunes is fast enough and results should feel live; a TTL cache is the obvious next step), structured logging/monitoring beyond the health check (nothing to page anyone about). Documented omissions read as judgement.
-- Architecture: why the Express BFF exists (iTunes API is CORS-blocked in browsers; also merges/normalizes/interleaves so the client stays dumb), and the paging story: iTunes `offset` is non-functional (verified empirically — identical pages at every offset), so the client fetches in growing batches (limit 20 → 40 → 60, server-owned via opaque signed cursors — clients can't jump the queue) with 10-at-a-time reveal and append-only merge by id (upstream ordering shifts between limits).
+- Architecture: why the Express BFF exists (iTunes API is CORS-blocked in browsers; also merges and normalizes so the client stays dumb), and the paging story: iTunes `offset` is non-functional (verified empirically — identical pages at every offset), so the client fetches in growing batches (limit 20 → 40 → 60, server-owned via opaque signed cursors — clients can't jump the queue) with 10-at-a-time reveal and append-only merge by id (upstream ordering shifts between limits).
 - Redux notes: Redux Toolkit; `createAsyncThunk` **is** redux-thunk under the hood (dispatches through the thunk middleware) — this satisfies the redux-thunk requirement with current best practice.
 - Testing: the three layers (pure logic, supertest route, component tests) and how to run them.
 
@@ -1927,6 +1852,20 @@ This is the "can I point people at this and leave it up?" gate. Run every check 
 **Step 6:** Use superpowers:requesting-code-review to review the finished app against the design doc before starting the Modern.js plan.
 
 ---
+
+## Post-review hardening (2026-09-01, after Task 18)
+
+Three review passes ran against the finished app (a general correctness review, an architecture/quality review, and a dedicated WCAG accessibility review), followed by a final pre-submission review. Work landed as a result, all test-first and gate-green (final suite: **51 tests across 5 files**):
+
+- **Stale `loadMore` settle guard** (critical finding): the slice tracks `loadMoreRequestId`; only the in-flight loadMore may settle, so a slow batch superseded by a new search — or a newer loadMore — can't append the old term's results or clobber the cursor. Three dedicated interleaving tests.
+- **Retry after failure**: the form's last-searched ref clears when a search fails, so the same term can be re-searched instead of the duplicate guards trapping the user on the error screen.
+- **`clearSearch`**: emptying the input resets the slice to initial state (standard reducer, exported action creator) and clears the last-searched ref; in-flight responses are dropped by the existing stale guards.
+- **Accessibility pass** (Luke): persistent `role="status"` region announcing "Searching…" / result counts ("Showing N of more than N results…" while more exist, exact count once exhausted — both copy variants test-pinned) / no-results; a visible **"Load more" button** beside the IO sentinel, both gated on `hasMore` (scroll-only reveal is keyboard/screen-reader-unreachable); `role="list"` on the results `ul` (Safari/VoiceOver strips list semantics from unstyled lists); error colour as a theme token; `aria-label` on the nav icon link, decorative SVGs `aria-hidden`.
+- **Search-engine opt-out**: `X-Robots-Tag: noindex, nofollow` middleware on every response, a deny-all `GET /robots.txt` route (works without the client build present), and a meta robots tag in `index.html` — the deployed app is shared by link, not indexable.
+- **Comment conventions**: a deletion pass removed line-narration comments, keeping only why/invariant/gotcha comments and JSDoc; the rule is now written into `CLAUDE.md`, alongside an explicit scoping of the MSW convention (MSW at the server's network boundary; the client suite deliberately stubs fetch at the BFF seam for synchronous fake-timer assertions).
+- Assorted from review: Enter-to-search restored on the buttonless form (native submit was reloading the page), JSDoc gaps filled, stale comments corrected, README factual drift fixed.
+
+Consciously deferred (documented, not forgotten): aborting superseded requests via `thunkAPI.signal`, a true per-kind discriminated `SearchResult` union, centralizing paging policy constants, remaining colour-contrast/token cleanup, rendering load-more errors (silent stop-paging is the documented behavior).
 
 ## Out of scope for this plan
 

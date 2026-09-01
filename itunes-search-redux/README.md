@@ -55,7 +55,7 @@ prefetching the next batch before the reveal window runs dry. Two consequences:
   (keeps what's shown, stops paging, no retry loop).
 
 - **Append-only merge by id.** iTunes' ordering is not consistent across limits, to mitigate this,
-  new items are appended only if they have an unseen id, ing dupes while scrolling.
+  new items are appended only if they have an unseen id, preventing dupes while scrolling.
 
 **Search UX:** Search is automatic as you type, debounced by 400ms with a 2-character minimum;
 Enter searches immediately and also facilitates single letter searches. There is a guard on stale

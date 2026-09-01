@@ -116,9 +116,13 @@ src/server/
   (`entity=musicArtist`, `album`, `song`, the server-decided `limit` each) → normalize
   into a discriminated union
   `{ kind: 'artist' | 'album' | 'song', id, title, subtitle, artworkUrl?, ... }`
-  → interleave by kind (artist, album, song, artist, …) so every page
-  shows a mix → `{ results, hasMore, next? }`. ~~`limit=50` each → `{ results, total }`~~
-  (revised — see *Paging revision*). (Server-side de-dupe was considered and
+  → ~~interleave by kind (artist, album, song, artist, …) so every page
+  shows a mix~~ → `{ results, hasMore, next? }`. ~~`limit=50` each → `{ results, total }`~~
+  (revised — see *Paging revision*). (Interleaving dropped in the 2026-09-01
+  UI pass: results now keep entity-group order — artists, then albums, then
+  songs — which reads better in the redesigned layout, and after the client's
+  append-only merge the displayed order is client-owned anyway, so the server
+  round-robin was logic serving a presentational choice it no longer served.) (Server-side de-dupe was considered and
   dropped: entity-scoped searches were verified not to duplicate ids within a
   call, and kind-prefixed ids can't collide across calls. De-duping across
   refetches at growing limits is the client reducer's job.)
@@ -140,7 +144,7 @@ src/client/
 │   ├── index.ts             ← configureStore, RootState/AppDispatch types
 │   └── searchSlice.ts       ← whole feature state
 ├── components/
-│   ├── SearchForm.tsx       ← <form role="search">, input + submit
+│   ├── SearchForm.tsx       ← <form role="search">, debounced input (no button)
 │   ├── SearchResults.tsx    ← <ul> + sentinel + status messages
 │   └── ResultCard.tsx       ← <li>: artwork, kind badge, title, subtitle
 └── hooks/
@@ -158,6 +162,7 @@ added, `loadingMore` status added, `results` is append-only):
   visibleCount: number,      // starts at 10
   next?: string,             // opaque server cursor for the next batch
   hasMore: boolean,          // server says more may exist upstream
+  loadMoreRequestId?: string, // in-flight loadMore (2026-09-01 — stale-settle guard)
   error?: string
 }
 ```
@@ -168,18 +173,34 @@ added, `loadingMore` status added, `results` is append-only):
   settle-handlers drop stale responses whose `meta.arg` no longer matches the
   current term (debounced typing overlaps requests; last-pending wins).
 - Search-as-you-type (added 2026-08-31): the form debounces input — a search
-  fires 400ms after typing pauses (min 2 chars); submit/Enter searches
+  fires 400ms after typing pauses (min 2 chars); ~~submit/~~Enter searches
   immediately with no minimum. A last-searched ref stops the armed timer from
-  duplicating a submit and identical terms from refiring.
+  duplicating ~~a submit~~ an Enter search and identical terms from refiring.
+  (The visible Search button was removed in the 2026-09-01 UI pass —
+  search-as-you-type makes it redundant. The form keeps an `onSubmit` handler
+  regardless: Enter still submits a button-less form, and without
+  `preventDefault` the native submit reloads the page and wipes state; it is
+  also the only way to search sub-minimum-length terms. The last-searched ref
+  is cleared when a search fails — 2026-09-01 review finding — so the same term
+  can be retried instead of the guards trapping the user on the error screen.)
 - `loadMore = createAsyncThunk(...)` refetches echoing the stored `next`
   cursor; `fulfilled` merges append-only by id (never replaces — upstream
   ordering shifts between limits) and stores the new `hasMore`/`next`. A
   condition guard prevents duplicate in-flight loads. A failed loadMore keeps
-  the shown results and stops paging (no retry loop).
+  the shown results and stops paging (no retry loop). Settle-handlers are
+  requestId-guarded (2026-09-01, review finding): only the in-flight loadMore
+  may settle, so a slow batch superseded by a new search — or by a newer
+  loadMore — can't append the old term's results or clobber the cursor after
+  the list was reset.
 - `revealMore` reducer: `visibleCount += 10`, capped at `results.length`.
-- Selectors: `selectVisibleResults`, `selectCanReveal` (unrevealed loaded items
-  remain), `selectShouldLoadMore` (reveal window nears end of loaded data and
-  server `hasMore`), `selectStatus`.
+- `clearSearch` reducer (added 2026-09-01): emptying the input resets the slice
+  to its initial state — results, paging and error all cleared, and the form's
+  last-searched ref reset so retyping the same term searches again. In-flight
+  responses that land afterwards are dropped by the existing stale guards
+  (term mismatch for searches, requestId for loadMore).
+- Selectors: `selectVisibleResults`, `selectHasMore` (unrevealed loaded items
+  remain, or upstream has more), `selectShouldLoadMore` (reveal window nears end
+  of loaded data and server `hasMore`), `selectStatus`.
 - `useInfiniteReveal`: IntersectionObserver on a sentinel rendered only while
   more can be revealed or loaded; on intersect, dispatch `revealMore`, and
   prefetch `loadMore` when the window nears the end. No scroll math, no
@@ -188,21 +209,44 @@ added, `loadingMore` status added, `results` is append-only):
   the viewport's bottom boundary at max scroll and never strictly enters it —
   Chrome then reports it non-intersecting and reveals stall after one page
   (found in a real browser; invisible to jsdom's mocked observer).
-- Required states in markup: `<ul aria-label="Search results">`; "No results found
-  for '{term}'" in `role="status"` / `aria-live="polite"`; errors and loading likewise.
+- Accessibility revision (2026-09-01, from a dedicated WCAG review): a visible
+  **"Load more" button** renders alongside the sentinel (both gated on
+  `hasMore`) — scroll-to-reveal alone is unreachable for keyboard and
+  screen-reader users, and the page-level scroller is `overflow:hidden`. The
+  per-branch status paragraphs were replaced by a single persistent
+  `role="status"` region that announces the lifecycle: "Searching…", "No
+  results found for '{term}'", and a result count — "Showing N of more than N
+  results for '{term}'" while more exist (locally or upstream), collapsing to
+  "Showing N of N" once everything is revealed and upstream is exhausted.
+  Explicit `role="list"` on the results `ul` (Safari/VoiceOver drops list
+  semantics from `list-style: none` lists); error colour moved to a theme
+  token.
+- Required states in markup: `<ul aria-label="Search results">`; ~~"No results
+  found for '{term}'" in `role="status"` / `aria-live="polite"`; errors and
+  loading likewise~~ status/no-results/count announcements via the persistent
+  status region above; errors in `role="alert"`.
+- Presentation (2026-09-01 UI pass): styled-components `ThemeProvider` with a
+  token theme (`styles/theme.ts` + `styled-components.d.ts` module
+  augmentation), `GlobalStyle` rendered inside it; app shell is a grid of
+  header, side nav and scrollable main. Results with no iTunes artwork fall
+  back to per-kind placeholder images (`public/images/blank-*.png` — Vite
+  serves `public/` at the root in dev and copies it into `dist/client` for
+  Express in prod).
 
 ## Testing (Vitest throughout)
 
-1. **Pure logic** — normalize/interleave; slice reducers and selectors
+1. **Pure logic** — normalize~~/interleave~~; slice reducers and selectors
    (reset on new search, revealMore capping, append-only merge by id on
    loadMore, error state). Bulk of coverage.
 2. **BFF route** — supertest vs `createApp()` with stubbed iTunes client: happy path,
-   empty term → 400, bad limit → 400, upstream failure → 502, empty results →
-   `{ results: [] }`.
+   empty term → 400, ~~bad limit~~ invalid/tampered cursor → 400, upstream
+   failure → 502, empty results → `{ results: [] }`, security headers, the
+   search-engine opt-out (X-Robots-Tag + robots.txt).
 3. **Components** — @testing-library/react with real store + mocked fetch:
-   submit → 10 items with kind badges; sentinel intersect → 20 and a prefetch
-   at a grown limit; empty → no-results notice. IntersectionObserver mocked
-   with a manual-trigger stub.
+   typing → 10 items with kind badges; sentinel intersect → 20 and a prefetch
+   at a grown limit; empty → no-results notice; debounce/Enter/retry flows
+   under fake timers; clear-on-empty reset; both result-count copy variants.
+   IntersectionObserver mocked with a manual-trigger stub.
 
 ## Deployment
 
@@ -233,6 +277,11 @@ This stays up as a portfolio piece, so "done" means production-ready, not demo-r
   on every deploy).
 - **Stays current**: Dependabot (npm + GitHub Actions, weekly) with CI as the
   merge gate — the piece keeps progressing with near-zero effort.
+- **Search-engine opt-out (2026-09-01)**: the deployed app is deliberately not
+  indexable — `X-Robots-Tag: noindex, nofollow` on every response, a deny-all
+  `/robots.txt` (served as a route so it exists without the client build), and
+  a meta robots tag in `index.html`. It's a portfolio piece shared by link,
+  not a public product.
 - **Honest scoping**: things deliberately omitted at this scale — rate limiting,
   response caching, structured logging/monitoring beyond the health check — are
   listed in the README with one-line rationale. Documented omissions read as
