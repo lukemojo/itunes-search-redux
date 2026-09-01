@@ -97,7 +97,7 @@ export function SearchForm() {
   };
 
   return (
-    <Form role="search" onSubmit={onSubmit}>
+    <Form role="search" onSubmit={onSubmit} autoComplete="off">
       <HiddenLabel htmlFor="search-term">Search artists, albums and songs</HiddenLabel>
       <Input
         id="search-term"
