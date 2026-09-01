@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type SubmitEvent } from 'react';
 import styled from 'styled-components';
 import { useAppDispatch } from '../store';
 import { searchItunes } from '../store/searchSlice';
@@ -76,8 +76,20 @@ export function SearchForm() {
     return () => clearTimeout(timer); // retyping (or unmount) resets the pause
   }, [term, dispatch]);
 
+  // Enter submits the form, this is the only way to search single-character terms
+  // This primarily exists as a fallback and safeguard for hitting the enter key
+  const onSubmit = (event: SubmitEvent) => {
+    event.preventDefault();
+
+    const trimmed = term.trim();
+    if (!trimmed || trimmed === lastSearched.current) return;
+    lastSearched.current = trimmed;
+
+    dispatch(searchItunes(trimmed));
+  };
+
   return (
-    <Form role="search">
+    <Form role="search" onSubmit={onSubmit}>
       <HiddenLabel htmlFor="search-term">Search artists, albums and songs</HiddenLabel>
       <Input
         id="search-term"

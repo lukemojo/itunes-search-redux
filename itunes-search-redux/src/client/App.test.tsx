@@ -170,13 +170,15 @@ describe('App', () => {
     }
   });
 
-  it('submit searches immediately and the pending debounce does not duplicate it', () => {
+  it('Enter searches immediately and the pending debounce does not duplicate it', () => {
     const fetchMock = stubFetch(singleBatch(makeResults(5)));
     vi.useFakeTimers();
     try {
       renderApp();
       fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'oasis' } });
-      act(() => vi.advanceTimersByTime(DEBOUNCE_MS * 2));
+
+      // Enter fires the form's submit event: search immediately, no debounce wait
+      fireEvent.submit(screen.getByRole('search'));
       expect(fetchMock).toHaveBeenCalledTimes(1);
 
       // The armed debounce timer must not fire a second identical search
