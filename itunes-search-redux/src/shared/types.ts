@@ -23,10 +23,6 @@ export interface SearchResult {
  * Represents the response from the iTunes API for a search query.
  */
 export interface SearchResponse {
-  /** The array of search results. */
+  /** Every result the search found, ordered artists, then albums, then songs. */
   results: SearchResult[];
-  /** True while refetching with a larger limit may yield more results. */
-  hasMore: boolean;
-  /** Opaque signed cursor for the next batch; present only while hasMore. */
-  next?: string;
 }

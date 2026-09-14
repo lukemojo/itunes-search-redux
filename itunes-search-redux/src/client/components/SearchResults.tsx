@@ -1,15 +1,14 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback } from 'react';
 import styled from 'styled-components';
 import { useInfiniteReveal } from '../hooks/useInfiniteReveal';
 import { useAppDispatch, useAppSelector } from '../store';
 import {
-  loadMore,
   revealMore,
   selectError,
   selectHasMore,
-  selectShouldLoadMore,
   selectStatus,
   selectTerm,
+  selectTotalCount,
   selectVisibleResults,
 } from '../store/searchSlice';
 import { ResultCard } from './ResultCard';
@@ -58,49 +57,37 @@ export function SearchResults() {
   const term = useAppSelector(selectTerm);
   const error = useAppSelector(selectError);
   const visible = useAppSelector(selectVisibleResults);
+  const total = useAppSelector(selectTotalCount);
   const hasMore = useAppSelector(selectHasMore);
-  const shouldLoadMore = useAppSelector(selectShouldLoadMore);
-
-  // Prefetch is state-driven: whenever the reveal window
-  // nears the end of loaded data, extend it
-  useEffect(() => {
-    if (shouldLoadMore) dispatch(loadMore());
-  }, [shouldLoadMore, dispatch]);
 
   // The sentinel is only rendered while more content exists, so the hook
   // automatically disconnects when the sentinel disappears.
   const reveal = useCallback(() => dispatch(revealMore()), [dispatch]);
   const sentinelRef = useInfiniteReveal(reveal, hasMore);
 
-  const successString = `Showing ${visible.length} of ${hasMore ? 'more than ' : ''}${visible.length} results for “${term}”`;
-  const noResultsString = `No results found for “${term}”`;
-
-  const getStatusText = () => {
-    if (status === 'loading') return 'Searching…';
-    if (visible.length === 0) return noResultsString;
-    if (visible.length > 0) return successString;
-  };
-
   if (status === 'idle') return null;
   if (status === 'failed') return <ErrorMessage role="alert">{error}</ErrorMessage>;
-
-  const statusText = getStatusText();
+  if (status === 'loading') return <StatusMessage role="status">Searching…</StatusMessage>;
+  if (total === 0) {
+    return <StatusMessage role="status">{`No results found for “${term}”`}</StatusMessage>;
+  }
 
   return (
     <>
-      <StatusMessage role="status">{statusText}</StatusMessage>
+      <StatusMessage role="status">
+        {`Showing ${visible.length} of ${total} results for “${term}”`}
+      </StatusMessage>
 
-      {status !== 'loading' && visible.length !== 0 && (
+      <ResultList aria-label="Search results">
+        {visible.map((result) => (
+          <ResultCard key={result.id} result={result} />
+        ))}
+      </ResultList>
+
+      {hasMore && (
         <>
-          <ResultList aria-label="Search results" role="list">
-            {visible.map((result) => (
-              <ResultCard key={result.id} result={result} />
-            ))}
-          </ResultList>
-          {hasMore && <div ref={sentinelRef} aria-hidden="true" />}
-          {hasMore && (
-            <LoadMoreButton onClick={() => dispatch(revealMore())}>Load more</LoadMoreButton>
-          )}
+          <div ref={sentinelRef} aria-hidden="true" />
+          <LoadMoreButton onClick={reveal}>Load more</LoadMoreButton>
         </>
       )}
     </>

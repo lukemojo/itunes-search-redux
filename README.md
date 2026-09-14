@@ -1,6 +1,6 @@
 # iTunes Search
 
-[![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
+[![CI](https://github.com/lukemojo/itunes-search-redux/actions/workflows/ci.yml/badge.svg)](https://github.com/lukemojo/itunes-search-redux/actions/workflows/ci.yml)
 
 **Live:** <https://itunes-search-redux.onrender.com>
 
@@ -10,7 +10,8 @@ revealed 10 at a time as you scroll
 - **[`itunes-search-redux/`](itunes-search-redux/)** — the primary submission.
   React + TypeScript + Redux Toolkit (thunks) on the client, an Express BFF
   serving both the API and the static build. Hand-rolled where it teaches
-  something: signed paging cursors, append-only merge, MSW-tested fan-out.
+  something: iTunes payload normalization into one discriminated union, and an
+  MSW-tested fan-out across the three entity endpoints.
 - ~**`itunes-search-modernjs/`**~ — The intention is to get this up and running in ModernJs
   alongside Redux as a comparison but ran out of time for submission which is why you see the nested folder.
 

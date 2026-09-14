@@ -1,8 +1,8 @@
 # iTunes Search (Redux)
 
-Search iTunes for artists, albums and songs. Results load incrementally and reveal
-10 at a time as you scroll. React + TypeScript + Redux Toolkit on the client, an
-Express BFF on the server, one deployable Node service.
+Search iTunes for artists, albums and songs. One request fetches the result set and
+the client reveals 10 at a time as you scroll. React + TypeScript + Redux Toolkit on
+the client, an Express BFF on the server, one deployable Node service.
 
 **Live:** <https://itunes-search-redux.onrender.com>
 
@@ -24,72 +24,60 @@ pnpm format       # oxfmt (format:check in CI)
 ## Architecture
 
 ```
-Browser ── /api/search?term=…[&cursor=…] ──► Express BFF ──► 3 × iTunes Search API
-   ▲                                            │              (musicArtist / album / song,
-   └── { results, hasMore, next? } ◄────────────┘               in parallel, 8s timeout each)
+Browser ──── /api/search?term=… ────► Express BFF ──► 3 × iTunes Search API
+   ▲                                     │             (musicArtist / album / song,
+   └──────── { results } ◄───────────────┘              in parallel, 8s timeout each)
 ```
 
-**Why backend for frontend** As detailed in the brief, the API will not work with CORS enabled.
-The decision was to use Express and go through our own origin.
-The server also normalizes the data into a consistent data set.
-Loosely-typed iTunes payloads are normalised into one discriminated union (`kind: 'artist' |
-'album' | 'song'`), ensuring the 'track' type is only a song and typing it as such.
-The client stays dumb. In production Express also serves the built
-client (static + SPA fallback).
+**Why a backend for frontend.** As detailed in the brief, the iTunes API is
+CORS-blocked in the browser, so calls go through our own origin. The server also
+normalizes the data: loosely-typed iTunes payloads become one discriminated union
+(`kind: 'artist' | 'album' | 'song'`), which is where `wrapperType: 'track'` is
+narrowed to actual songs rather than movies and TV episodes. The client stays dumb.
+In production Express also serves the built client (static + SPA fallback).
 
-**Pagination**: iTunes has no valid way of paginating results. After some research
-I found an undocumented `offset` parameter is commonly used but I found it to be
-non-functional — verified by manual testing.
+**Paging.** iTunes has no working pagination. The commonly cited `offset` parameter
+is undocumented and did nothing in manual testing, so there is no second page to ask
+for. Rather than fake one by refetching with a growing `limit` — which re-downloads
+everything on every step and reshuffles the order — the server takes a single slice
+of 50 per entity (`RESULTS_PER_ENTITY` in `src/server/itunes.ts`, iTunes caps `limit`
+at 200) and the client reveals 10 rows at a time from what it already has.
 
-Instead the client fetches in growing batches per-entity limit
-20 → 40 → 60 … capped at iTunes' max of 200, revealing 10 rows per scroll and
-prefetching the next batch before the reveal window runs dry. Two consequences:
+One fetch per search, one reveal window, no paging state on the wire. Deeper results
+are one constant away if they are ever wanted.
 
-- **Server-owned limits via signed cursors.** The limit never appears in the
-  public API — each `hasMore` response carries `next`, an HMAC-signed
-  token encoding the next limit. Clients send it back as `?cursor=`; protected
-  against tampering, which returns a 400. For iTunes this is largely theatre,
-  but with strict usage limits I wanted to show guarding against client manipulation.
+**Search UX.** Search is automatic as you type, debounced by 400ms with a
+2-character minimum; Enter searches immediately and is also how single-letter terms
+are searched. Responses for a superseded term are dropped so a slow early request
+cannot overwrite a later one, and an identical repeat term does not re-hit the API.
 
-  Cursors die on restart — the client degrades gracefully
-  (keeps what's shown, stops paging, no retry loop).
-
-- **Append-only merge by id.** iTunes' ordering is not consistent across limits, to mitigate this,
-  new items are appended only if they have an unseen id, preventing dupes while scrolling.
-
-**Search UX:** Search is automatic as you type, debounced by 400ms with a 2-character minimum;
-Enter searches immediately and also facilitates single letter searches. There is a guard on stale
-superseded responses, and search terms are diffed so an identical search with results showing
-does not hit the API.
-
-**rootMargin** A rootMargin was implemented after the scroll intersection was found to be buggy
-due to a zero height sentinel on the bottom of the viewport.
-
-**Load More** A Load More button was later added to mitigate any infinite scroll issues and for accessibility.
-
-Some logic was updated specifically for screen reading and accessibility.
+**Revealing.** An `IntersectionObserver` sentinel reveals the next 10 as it comes
+into view — `rootMargin` gives the zero-height sentinel something to intersect. A
+`Load more` button does the same thing for keyboard and screen-reader users, who
+never trigger a scroll sentinel.
 
 ## Redux notes
 
-Redux Toolkit throughout. `createAsyncThunk` dispatches through the thunk middleware.
-This should satisfy the redux-thunk requirement. The project contains
-`searchItunes` and `loadMore` thunks with lifecycle reducers in `extraReducers`, a `condition`
-guard against duplicate in-flight loads, and memoized selectors (`createSelector`) for the
-item reveal and pre-fetching.
+Redux Toolkit throughout. `createAsyncThunk` dispatches through the thunk middleware,
+satisfying the redux-thunk requirement. One `searchItunes` thunk with its lifecycle
+in `extraReducers`, and memoized selectors (`createSelector`) for the reveal window.
+
+State is one fetched list plus a `visibleCount` over it, so "how much is shown" is a
+single number rather than a second set of paging flags.
 
 ## Testing
 
-Three layers, 51 tests, colocated `*.test.ts(x)`:
+Three layers, 39 tests, colocated `*.test.ts(x)`:
 
-- **Pure logic** — payload normalization; cursor sign/verify round-trips and
-  tamper rejection; slice reducers and selectors (reset-on-search, reveal
-  capping, append-only merge, stale-response guard, dead-cursor degrade).
+- **Pure logic** — payload normalization (including the non-music `wrapperType:
+'track'` cases); slice reducers and selectors (reset-on-search, reveal capping,
+  stale-response guard).
 - **Express route** — supertest against `createApp()` with a stubbed searcher:
-  cursor walk 20 → 40 → 60, invalid cursor/term → 400, upstream failure → 502,
+  term validation → 400, upstream failure → 502, unknown API path → 404,
   CSP header present.
-- **Components** — Testing Library with a real store: reveal and prefetch flows
-  via a manual-trigger IntersectionObserver stub, debounce behavior with fake
-  timers, error and no-results states.
+- **Components** — Testing Library with a real store: reveal via a manual-trigger
+  IntersectionObserver stub, debounce behavior with fake timers, error and
+  no-results states.
 
 Server-side network calls are mocked with MSW at the network boundary — any
 unmocked external request errors, while loopback passes through so supertest
@@ -117,14 +105,14 @@ The following was done to facilitate.
 
 ## Conscious omissions
 
-- **Rate limiting** — a single low-traffic origin behind Render; the signed
-  cursor already blocks limit manipulation.
-- **Not indexable by google**
+- **Rate limiting** — the real exposure on a public proxy is someone hammering
+  `/api/search` and burning the upstream quota. A single low-traffic origin behind
+  Render did not warrant it here, but `express-rate-limit` on `/api` is the first
+  thing to add if this ever took real traffic.
+- **Not indexable by Google** — `X-Robots-Tag` on every response plus a deny-all
+  `robots.txt`.
 - **Response caching** — iTunes responses are already CDN-cached upstream and
   fast; results should feel live.
-- **Structured logging / monitoring**
-- **Env-var cursor secret** — per-boot randomness means a deploy invalidates
-  in-flight cursors; the client degrades gracefully, so surviving restarts buys
-  little here.
-- **Full Styling** A theme was implemented but a stopping point was reached for submission
-  before full styling. The app looks empty when nothing has been searched.
+- **Structured logging / monitoring.**
+- **Full styling** — a theme was implemented but a stopping point was reached for
+  submission before full styling. The app looks empty when nothing has been searched.

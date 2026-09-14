@@ -1,14 +1,15 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { act } from 'react';
 import { Provider } from 'react-redux';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import { DEBOUNCE_MS } from './components/SearchForm';
+import ThemeProvider from './components/ThemeProvider';
 import { makeStore } from './store';
+import { PAGE_SIZE } from './store/searchSlice';
 import { MockIntersectionObserver } from './test/mockIntersectionObserver';
 import type { SearchResult } from '../shared/types';
-import ThemeProvider from './components/ThemeProvider';
 
 /** n results cycling through the three kinds so badges are always present. */
 const makeResults = (n: number): SearchResult[] =>
@@ -19,21 +20,16 @@ const makeResults = (n: number): SearchResult[] =>
     subtitle: `Sub ${i}`,
   }));
 
-/** Stubs fetch to answer each /api/search call by the cursor it carries (null = fresh search). */
-const stubFetch = (
-  respond: (cursor: string | null) => { results: SearchResult[]; hasMore: boolean; next?: string },
-) => {
-  const fetchMock = vi.fn(async (url: string) => {
-    const cursor = new URL(url, 'http://localhost').searchParams.get('cursor');
-    return { ok: true, status: 200, json: async () => respond(cursor) };
-  });
-
+/** Stubs fetch so every /api/search call answers with the same fixed set. */
+const stubFetch = (results: SearchResult[]) => {
+  const fetchMock = vi.fn(async (_url: string) => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ results }),
+  }));
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
 };
-
-/** One fixed page regardless of cursor, with no more upstream. */
-const singleBatch = (results: SearchResult[]) => () => ({ results, hasMore: false });
 
 const renderApp = () =>
   render(
@@ -61,92 +57,71 @@ afterEach(() => {
 });
 
 describe('App', () => {
-  it('shows the first 10 results with kind badges after a search', async () => {
-    stubFetch(singleBatch(makeResults(25)));
+  it('shows the first page of results with kind badges after a search', async () => {
+    stubFetch(makeResults(25));
     renderApp();
     await search('radiohead');
 
     const list = await screen.findByRole('list', { name: /search results/i });
-    expect(screen.getAllByRole('listitem')).toHaveLength(10);
+    expect(screen.getAllByRole('listitem')).toHaveLength(PAGE_SIZE);
     expect(screen.getAllByText('Artist').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Album').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Song').length).toBeGreaterThan(0);
     expect(list).toBeInTheDocument();
   });
 
-  it('reveals 10 more when the sentinel intersects', async () => {
-    stubFetch(singleBatch(makeResults(25)));
+  it('fetches once per search — the whole result set arrives in one response', async () => {
+    const fetchMock = stubFetch(makeResults(25));
+    renderApp();
+    await search('radiohead');
+    await screen.findByRole('list', { name: /search results/i });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/api/search?term=radiohead');
+  });
+
+  it('reveals another page when the sentinel intersects', async () => {
+    stubFetch(makeResults(25));
     renderApp();
     await search('radiohead');
     await screen.findByRole('list', { name: /search results/i });
 
     const observer = MockIntersectionObserver.instances.at(-1)!;
-    const { act } = await import('react');
     act(() => observer.trigger());
 
-    expect(screen.getAllByRole('listitem')).toHaveLength(20);
+    expect(screen.getAllByRole('listitem')).toHaveLength(PAGE_SIZE * 2);
   });
 
-  it('prefetches the next batch when the reveal window nears the end of loaded data', async () => {
-    // First batch loads 15 with more upstream: 5 unrevealed after the initial 10,
-    // so the prefetch trigger fires immediately, echoing the server's cursor.
-    const fetchMock = stubFetch((cursor) =>
-      cursor === null
-        ? { results: makeResults(15), hasMore: true, next: 'cursor-40' }
-        : { results: makeResults(35), hasMore: false },
-    );
-
+  it('announces how many of the total are showing', async () => {
+    stubFetch(makeResults(25));
     renderApp();
     await search('radiohead');
     await screen.findByRole('list', { name: /search results/i });
 
-    // Initial search + prefetch
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('cursor=cursor-40');
-
-    // The appended batch is revealable on the next intersect
-    const observer = MockIntersectionObserver.instances.at(-1)!;
-    const { act } = await import('react');
-    act(() => observer.trigger());
-
-    // 10 initial + 10 revealed from the prefetched batch
-    expect(screen.getAllByRole('listitem')).toHaveLength(20);
-  });
-
-  it('announces "more than" the visible count while more results exist', async () => {
-    stubFetch(singleBatch(makeResults(25)));
-    renderApp();
-    await search('radiohead');
-    await screen.findByRole('list', { name: /search results/i });
-
-    // 10 of 25 revealed — unrevealed items still count as "more"
     expect(screen.getByRole('status')).toHaveTextContent(
-      'Showing 10 of more than 10 results for “radiohead”',
+      'Showing 10 of 25 results for “radiohead”',
     );
   });
 
-  it('announces the exact count once everything is revealed and upstream is exhausted', async () => {
-    stubFetch(singleBatch(makeResults(25)));
+  it('Load more reveals the remainder and then stops being rendered', async () => {
+    stubFetch(makeResults(15));
     renderApp();
     await search('radiohead');
     await screen.findByRole('list', { name: /search results/i });
 
-    // Reveal the remaining 15 via the Load more button
-    const button = screen.getByRole('button', { name: /load more/i });
-    fireEvent.click(button);
-    fireEvent.click(button);
+    fireEvent.click(screen.getByRole('button', { name: /load more/i }));
 
-    expect(screen.getAllByRole('listitem')).toHaveLength(25);
+    expect(screen.getAllByRole('listitem')).toHaveLength(15);
     expect(screen.getByRole('status')).toHaveTextContent(
-      'Showing 25 of 25 results for “radiohead”',
+      'Showing 15 of 15 results for “radiohead”',
     );
 
-    // Nothing left to reveal or fetch: the button must not linger as a dead control
+    // Nothing left to reveal: the button must not linger as a dead control
     expect(screen.queryByRole('button', { name: /load more/i })).not.toBeInTheDocument();
   });
 
   it('notifies the user when there are no results', async () => {
-    stubFetch(singleBatch([]));
+    stubFetch([]);
     renderApp();
     await search('zzzzzz');
 
@@ -156,7 +131,7 @@ describe('App', () => {
   });
 
   it('searches automatically once typing pauses, without a submit', async () => {
-    const fetchMock = stubFetch(singleBatch(makeResults(5)));
+    const fetchMock = stubFetch(makeResults(5));
     vi.useFakeTimers();
     try {
       renderApp();
@@ -180,7 +155,7 @@ describe('App', () => {
   });
 
   it('does not auto-search single-character terms', () => {
-    const fetchMock = stubFetch(singleBatch(makeResults(5)));
+    const fetchMock = stubFetch(makeResults(5));
     vi.useFakeTimers();
     try {
       renderApp();
@@ -193,7 +168,7 @@ describe('App', () => {
   });
 
   it('Enter searches immediately and the pending debounce does not duplicate it', () => {
-    const fetchMock = stubFetch(singleBatch(makeResults(5)));
+    const fetchMock = stubFetch(makeResults(5));
     vi.useFakeTimers();
     try {
       renderApp();
@@ -235,7 +210,7 @@ describe('App', () => {
       .fn(async (): Promise<FetchResponse> => ({
         ok: true,
         status: 200,
-        json: async () => ({ results: makeResults(5), hasMore: false }),
+        json: async () => ({ results: makeResults(5) }),
       }))
       .mockImplementationOnce(async () => ({
         ok: false,
@@ -254,7 +229,7 @@ describe('App', () => {
   });
 
   it('resets to initial state on input clear', async () => {
-    const fetchMock = stubFetch(singleBatch(makeResults(5)));
+    const fetchMock = stubFetch(makeResults(5));
     vi.useFakeTimers();
     try {
       renderApp();

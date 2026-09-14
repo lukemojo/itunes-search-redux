@@ -46,6 +46,12 @@ export function createApp(search: Searcher = searchItunes): express.Express {
 
   app.use('/api', createSearchRouter(search));
 
+  // An unknown API path is a client error, not a page: answer it here so it
+  // never reaches the SPA fallback and comes back as 200 HTML.
+  app.use('/api', (_req, res) => {
+    res.status(404).json({ error: 'Not found' });
+  });
+
   // From dist/server/app.js, ../client is the Vite build (dist/client).
   const clientDist = path.resolve(import.meta.dirname, '../client');
   app.use(express.static(clientDist));

@@ -1,23 +1,17 @@
 import { createAsyncThunk, createSelector, createSlice } from '@reduxjs/toolkit';
 import type { SearchResponse, SearchResult } from '../../shared/types';
 
-/** How many merged results each scroll reveals. */
+/** How many results are revealed at a time, starting with the first page. */
 export const PAGE_SIZE = 10;
 
-/** The whole search feature's state: one fetched-so-far list and a reveal window over it. */
+/** The whole search feature's state: one result set and a reveal window over it. */
 export interface SearchState {
   term: string;
-  status: 'idle' | 'loading' | 'loadingMore' | 'succeeded' | 'failed';
-  /** Loaded so far — append-only merged by id */
+  status: 'idle' | 'loading' | 'succeeded' | 'failed';
+  /** Every result the last successful search returned. */
   results: SearchResult[];
-  /** How many of `results` are revealed; grows by PAGE_SIZE per scroll. */
+  /** How many of `results` are revealed; grows by PAGE_SIZE per reveal. */
   visibleCount: number;
-  /** Opaque server cursor for the next batch; absent when upstream is exhausted. */
-  next?: string;
-  /** Server says a refetch may yield more. */
-  hasMore: boolean;
-  /** requestId of the in-flight loadMore */
-  loadMoreRequestId?: string;
   error?: string;
 }
 
@@ -27,12 +21,11 @@ const initialState: SearchState = {
   status: 'idle',
   results: [],
   visibleCount: PAGE_SIZE,
-  hasMore: false,
 };
 
-/** Calls the BFF (Backend For Frontend), echoing the server's cursor when extending a search. */
-async function fetchSearch(term: string, cursor?: string): Promise<SearchResponse> {
-  const params = new URLSearchParams({ term, ...(cursor ? { cursor } : {}) });
+/** Fetches a term's results from the BFF, surfacing the server's error message. */
+async function fetchSearch(term: string): Promise<SearchResponse> {
+  const params = new URLSearchParams({ term });
   const res = await fetch(`/api/search?${params}`);
 
   if (!res.ok) {
@@ -43,28 +36,10 @@ async function fetchSearch(term: string, cursor?: string): Promise<SearchRespons
   return (await res.json()) as SearchResponse;
 }
 
-/** Fresh search: fetches the first batch and resets all paging state. */
+/** Runs a search, replacing whatever was shown before. */
 export const searchItunes = createAsyncThunk<SearchResponse, string>(
   'search/searchItunes',
   (term) => fetchSearch(term),
-);
-
-/**
- * Extends the loaded set by echoing the server's signed cursor. Guarded so
- * only one load runs at a time and only while a cursor exists.
- */
-export const loadMore = createAsyncThunk<SearchResponse, void, { state: { search: SearchState } }>(
-  'search/loadMore',
-  (_, { getState }) => {
-    const { term, next } = getState().search;
-    return fetchSearch(term, next);
-  },
-  {
-    condition: (_, { getState }) => {
-      const { status, next } = getState().search;
-      return status === 'succeeded' && next !== undefined;
-    },
-  },
 );
 
 const searchSlice = createSlice({
@@ -75,7 +50,7 @@ const searchSlice = createSlice({
     revealMore(state) {
       state.visibleCount = Math.min(state.visibleCount + PAGE_SIZE, state.results.length);
     },
-    /** Clear results, paging and errors when search is cleared */
+    /** Clear results and errors when the search box is emptied. */
     clearSearch() {
       return initialState;
     },
@@ -87,9 +62,6 @@ const searchSlice = createSlice({
         state.term = action.meta.arg;
         state.results = [];
         state.visibleCount = PAGE_SIZE;
-        state.next = undefined;
-        state.hasMore = false;
-        state.loadMoreRequestId = undefined; // orphan any in-flight loadMore
         state.error = undefined;
       })
       .addCase(searchItunes.fulfilled, (state, action) => {
@@ -98,40 +70,11 @@ const searchSlice = createSlice({
         if (action.meta.arg !== state.term) return;
         state.status = 'succeeded';
         state.results = action.payload.results;
-        state.hasMore = action.payload.hasMore;
-        state.next = action.payload.next;
       })
       .addCase(searchItunes.rejected, (state, action) => {
         if (action.meta.arg !== state.term) return; // stale failure — ignore
         state.status = 'failed';
         state.error = action.error.message ?? 'Search failed';
-      })
-      .addCase(loadMore.pending, (state, action) => {
-        state.status = 'loadingMore';
-        state.loadMoreRequestId = action.meta.requestId;
-      })
-      .addCase(loadMore.fulfilled, (state, action) => {
-        // Only the in-flight request may settle — a superseded batch is stale.
-        if (action.meta.requestId !== state.loadMoreRequestId) return;
-        state.loadMoreRequestId = undefined;
-        state.status = 'succeeded';
-        state.hasMore = action.payload.hasMore;
-        state.next = action.payload.next;
-        // Append-only merge: never reorder or replace what the user has seen.
-        const seen = new Set(state.results.map((result) => result.id));
-        for (const result of action.payload.results) {
-          if (!seen.has(result.id)) state.results.push(result);
-        }
-      })
-      .addCase(loadMore.rejected, (state, action) => {
-        if (action.meta.requestId !== state.loadMoreRequestId) return; // stale — ignore
-        state.loadMoreRequestId = undefined;
-        // Keep what's shown; surface the error without blowing the list away.
-        // Drop the cursor so a dead one (e.g. server restart) can't retry-loop.
-        state.status = 'succeeded';
-        state.hasMore = false;
-        state.next = undefined;
-        state.error = action.error.message ?? 'Loading more failed';
       });
   },
 });
@@ -148,8 +91,13 @@ interface WithSearch {
 export const selectStatus = (state: WithSearch) => state.search.status;
 /** The term currently being (or last) searched. */
 export const selectTerm = (state: WithSearch) => state.search.term;
-/** The most recent search or load-more error message, if any. */
+/** The most recent search error message, if any. */
 export const selectError = (state: WithSearch) => state.search.error;
+/** How many results the search returned in total, revealed or not. */
+export const selectTotalCount = (state: WithSearch) => state.search.results.length;
+/** True while loaded results remain unrevealed. */
+export const selectHasMore = (state: WithSearch) =>
+  state.search.visibleCount < state.search.results.length;
 
 /**
  * The revealed window over the loaded results. Memoized: slice() makes a new
@@ -159,16 +107,3 @@ export const selectVisibleResults = createSelector(
   [(state: WithSearch) => state.search.results, (state: WithSearch) => state.search.visibleCount],
   (results, visibleCount) => results.slice(0, visibleCount),
 );
-
-/** True while scrolling can show more — unrevealed loaded items, or more upstream. */
-export const selectHasMore = (state: WithSearch) =>
-  state.search.visibleCount < state.search.results.length || state.search.hasMore;
-
-/**
- * True when under a page of loaded headroom remains, the server reports more,
- * and no load is in flight — the prefetch trigger.
- */
-export const selectShouldLoadMore = (state: WithSearch) =>
-  state.search.status === 'succeeded' &&
-  state.search.hasMore &&
-  state.search.results.length - state.search.visibleCount <= PAGE_SIZE;

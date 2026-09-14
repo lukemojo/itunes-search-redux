@@ -1,4 +1,4 @@
-import type { SearchResponse, SearchResult } from '../shared/types.js';
+import type { SearchResult } from '../shared/types.js';
 
 /**
  * The subset of an iTunes Search API result.
@@ -58,22 +58,24 @@ const ITUNES_URL = 'https://itunes.apple.com/search';
 const ENTITIES = ['musicArtist', 'album', 'song'] as const;
 const UPSTREAM_TIMEOUT_MS = 8000;
 
-/** iTunes rejects limits above 200, so paging stops there. */
-export const MAX_LIMIT = 200;
+/**
+ * How many results to request per entity, so up to 3x this comes back.
+ * iTunes has no working offset parameter, so there is no second page to fetch:
+ * take one generous slice up front and let the client reveal it gradually.
+ * Raise it (iTunes caps limit at 200) if the result set needs to go deeper.
+ */
+export const RESULTS_PER_ENTITY = 50;
 
 /**
  * Searches iTunes for a term with three parallel entity-scoped calls
- * (musicArtist, album, song), then normalizes the set.
- * `limit` is per entity; `hasMore` means refetching with a larger limit may
- * yield more.
- * Refetch acts as pagination as there is no valid pagination mechanism.
+ * (musicArtist, album, song) and normalizes the combined set.
  * Must run server-side: iTunes CORS-blocks browsers. Each upstream call is
  * abandoned after 8s via AbortSignal.timeout.
  */
-export async function searchItunes(term: string, limit = 20) {
+export async function searchItunes(term: string): Promise<SearchResult[]> {
   const payloads = await Promise.all(
     ENTITIES.map(async (entity) => {
-      const params = new URLSearchParams({ term, entity, limit: limit.toString() });
+      const params = new URLSearchParams({ term, entity, limit: String(RESULTS_PER_ENTITY) });
       const res = await fetch(`${ITUNES_URL}?${params}`, {
         signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
       });
@@ -84,14 +86,8 @@ export async function searchItunes(term: string, limit = 20) {
     }),
   );
 
-  // A full raw page from any entity means a larger limit may yield more
-  const hasMore = limit < MAX_LIMIT && payloads.some((items) => items.length >= limit);
-
-  const normalized = payloads
+  return payloads
     .flat()
     .map(normalizeItem)
     .filter((result): result is SearchResult => result !== null);
-
-  const data: SearchResponse = { results: normalized, hasMore };
-  return data;
 }

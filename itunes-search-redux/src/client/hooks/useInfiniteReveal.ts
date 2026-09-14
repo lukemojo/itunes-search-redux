@@ -17,8 +17,8 @@ export function useInfiniteReveal(onReveal: () => void, enabled: boolean) {
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) onReveal();
       },
-      // The rootMargin is required to ensure intersection is triggered
-      // before the sentinel is actually visible, allowing for prefetching of data.
+      // The sentinel has no height of its own, so without a margin it can sit
+      // exactly on the viewport edge and never register as intersecting.
       { rootMargin: '200px 0px' },
     );
 
